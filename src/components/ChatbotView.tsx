@@ -26,7 +26,7 @@ export const ChatbotView: React.FC<ChatbotViewProps> = ({
     {
       id: 'welcome',
       sender: 'assistant',
-      text: 'Halo! Salam hangat dari Sulawesi Utara! Torang asisten pintar PesisirKu siap bantu jawab apa saja seputar 33+ wisata pesisir (tiket, perahu, ombak, snorkeling) sampe info kuliner sedap (Tinutuan, Klappertaart) deng tempat hits di Sulut pake Bahasa Manado. Ada yang bisa kita bantu akang?',
+      text: 'Halo! Salam hangat dari Sulawesi Utara! Torang asisten pintar Localist siap bantu cari info pantai, gunung, air terjun, danau, budaya, dan kuliner di Sulut pake Bahasa Manado. Ada yang bisa kita bantu akang?',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     }
   ]);
@@ -93,7 +93,7 @@ export const ChatbotView: React.FC<ChatbotViewProps> = ({
       {
         id: 'welcome',
         sender: 'assistant',
-        text: 'Percakapan so direset. Silakan tanya hal lain seputar wisata pesisir, kuliner, atau tempat menarik di Sulawesi Utara!',
+        text: 'Percakapan so direset. Silakan tanya hal lain seputar destinasi, budaya, kuliner, atau tempat menarik di Sulawesi Utara!',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       }
     ]);
@@ -111,7 +111,7 @@ export const ChatbotView: React.FC<ChatbotViewProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <h2 className="font-bold text-sm sm:text-base text-slate-800 dark:text-white">
-                PesisirKu AI Assistant
+                Localist AI Assistant
               </h2>
               <span className="hidden sm:inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-bold bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300">
                 <Sparkles className="w-3 h-3 text-amber-600 dark:text-amber-400" />
@@ -123,7 +123,7 @@ export const ChatbotView: React.FC<ChatbotViewProps> = ({
               </span>
             </div>
             <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              Menjawab seputar 33+ wisata pesisir resmi dan info umum Sulawesi Utara dalam Bahasa Manado
+              Menjawab seputar wisata alam, budaya, kuliner, dan info umum Sulawesi Utara dalam Bahasa Manado
             </p>
           </div>
         </div>

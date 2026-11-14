@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { Destination, Region, TripItinerary, UserTripQuery } from '../types/destination';
+import { Destination, Region, REGIONS, TripItinerary, UserTripQuery } from '../types/destination';
 import { generateGroundedItinerary } from '../services/aiService';
 import { AuthUser, saveItinerary } from '../services/firebaseService';
 import { 
   Sparkles, Calendar, DollarSign, Users, Compass, 
   CheckCircle, BookmarkCheck, ArrowRight, Clock, 
-  MapPin, AlertCircle, ShieldCheck
+  MapPin, AlertCircle, ShieldCheck, Ship, ExternalLink
 } from 'lucide-react';
 
 interface TripPlannerViewProps {
@@ -24,25 +24,28 @@ export const TripPlannerView: React.FC<TripPlannerViewProps> = ({
   onItinerarySaved
 }) => {
   // Query Form State
-  const [naturalPrompt, setNaturalPrompt] = useState<string>('2 hari di Bunaken dan Likupang, budget 600 ribu, bawa anak, suka snorkeling');
+  const [naturalPrompt, setNaturalPrompt] = useState<string>('Wisata alam 2 hari di Sulawesi Utara, budget 800 ribu, kombinasi gunung, danau, dan air terjun');
   const [days, setDays] = useState<number>(2);
   const [budget, setBudget] = useState<number>(600000);
-  const [selectedRegions, setSelectedRegions] = useState<Region[]>(['Manado', 'Minahasa Utara']);
-  const [isFamily, setIsFamily] = useState<boolean>(true);
-  const [likesSnorkel, setLikesSnorkel] = useState<boolean>(true);
+  const [selectedRegions, setSelectedRegions] = useState<Region[]>([...REGIONS]);
+  const [isFamily, setIsFamily] = useState<boolean>(false);
+  const [likesSnorkel, setLikesSnorkel] = useState<boolean>(false);
   const [likesDive, setLikesDive] = useState<boolean>(false);
 
   // Generation State
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [generatedItinerary, setGeneratedItinerary] = useState<TripItinerary | null>(null);
   const [isSaved, setIsSaved] = useState<boolean>(false);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [generationError, setGenerationError] = useState<string | null>(null);
 
   // Preset prompts
   const samplePrompts = [
     '2 hari di Bunaken, budget 500 ribu, bawa anak, suka snorkeling',
     '3 hari keliling pantai Likupang Minahasa Utara, budget 800 ribu, cari pantai pasir putih sepi',
     '1 hari muck diving dan mangrove di Selat Lembeh Bitung, budget 700 ribu',
-    'Wisata santai kuliner pesisir dan sunset di Manado untuk keluarga'
+    'Wisata santai kuliner pesisir dan sunset di Manado untuk keluarga',
+    'Wisata gunung, danau, dan air terjun di Tomohon dan Bolaang Mongondow Timur'
   ];
 
   const handleToggleRegion = (reg: Region) => {
@@ -59,6 +62,7 @@ export const TripPlannerView: React.FC<TripPlannerViewProps> = ({
     if (e) e.preventDefault();
     setIsGenerating(true);
     setIsSaved(false);
+    setGenerationError(null);
 
     const userQuery: UserTripQuery = {
       days,
@@ -75,12 +79,13 @@ export const TripPlannerView: React.FC<TripPlannerViewProps> = ({
       setGeneratedItinerary(result);
     } catch (err) {
       console.error('Planner error:', err);
+      setGenerationError(err instanceof Error ? err.message : 'Rencana perjalanan gagal dibuat. Silakan coba lagi.');
     } finally {
       setIsGenerating(false);
     }
   };
 
-  const handleSaveItinerary = () => {
+  const handleSaveItinerary = async () => {
     if (!currentUser) {
       onLoginRequest();
       return;
@@ -91,9 +96,18 @@ export const TripPlannerView: React.FC<TripPlannerViewProps> = ({
       ...generatedItinerary,
       userId: currentUser.uid
     };
-    saveItinerary(toSave);
-    setIsSaved(true);
-    onItinerarySaved();
+    setIsSaving(true);
+    setGenerationError(null);
+    try {
+      await saveItinerary(toSave);
+      setIsSaved(true);
+      onItinerarySaved();
+    } catch (error) {
+      console.error('Unable to save itinerary:', error);
+      setGenerationError('Rencana gagal disimpan ke Firebase. Periksa koneksi dan aturan akses.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -107,10 +121,10 @@ export const TripPlannerView: React.FC<TripPlannerViewProps> = ({
             <span>Grounded AI Engine • Anti-Halusinasi</span>
           </div>
           <h1 className="text-2xl sm:text-4xl font-extrabold text-slate-900 dark:text-white tracking-tight">
-            AI Trip Planner Pesisir Sulawesi Utara
+            AI Trip Planner Sulawesi Utara
           </h1>
           <p className="mt-2 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
-            Tulis kebutuhan perjalanan Anda dalam bahasa santai. LLM menyusun itinerary otomatis langsung dari data objek wisata resmi Manado, Bitung, & Minut.
+            Tulis kebutuhan perjalanan Anda dalam bahasa santai. Rencana disusun dari katalog destinasi di berbagai wilayah Sulawesi Utara, termasuk pantai, gunung, danau, serta air terjun.
           </p>
         </div>
 
@@ -138,7 +152,7 @@ export const TripPlannerView: React.FC<TripPlannerViewProps> = ({
               {/* Sample Prompt Chips */}
               <div>
                 <span className="text-[11px] text-slate-400 block mb-1.5 font-medium">Contoh Skenario Cepat:</span>
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex max-h-28 flex-wrap gap-1.5 overflow-y-auto">
                   {samplePrompts.map((promptText, i) => (
                     <button
                       type="button"
@@ -194,7 +208,7 @@ export const TripPlannerView: React.FC<TripPlannerViewProps> = ({
                   Cakupan Wilayah
                 </label>
                 <div className="flex flex-wrap gap-1.5">
-                  {(['Manado', 'Bitung', 'Minahasa Utara'] as Region[]).map(reg => {
+                  {REGIONS.map(reg => {
                     const isSelected = selectedRegions.includes(reg);
                     return (
                       <button
@@ -237,6 +251,12 @@ export const TripPlannerView: React.FC<TripPlannerViewProps> = ({
                 </label>
               </div>
 
+              {generationError && (
+                <p role="alert" className="rounded-xl bg-rose-50 p-3 text-xs text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
+                  {generationError}
+                </p>
+              )}
+
               {/* Submit Button */}
               <button
                 type="submit"
@@ -246,7 +266,7 @@ export const TripPlannerView: React.FC<TripPlannerViewProps> = ({
                 {isGenerating ? (
                   <>
                     <Sparkles className="w-4 h-4 animate-spin" />
-                    <span>Menyusun Itinerary dari Firestore...</span>
+                    <span>Menyusun itinerary dari katalog Localist...</span>
                   </>
                 ) : (
                   <>
@@ -276,7 +296,8 @@ export const TripPlannerView: React.FC<TripPlannerViewProps> = ({
 
                   {/* Save button */}
                   <button
-                    onClick={handleSaveItinerary}
+                    onClick={() => void handleSaveItinerary()}
+                    disabled={isSaving}
                     className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
                       isSaved
                         ? 'bg-emerald-600 text-white'
@@ -291,7 +312,7 @@ export const TripPlannerView: React.FC<TripPlannerViewProps> = ({
                     ) : (
                       <>
                         <BookmarkCheck className="w-4 h-4" />
-                        <span>Simpan Rencana</span>
+                        <span>{isSaving ? 'Menyimpan...' : 'Simpan Rencana'}</span>
                       </>
                     )}
                   </button>
@@ -379,6 +400,20 @@ export const TripPlannerView: React.FC<TripPlannerViewProps> = ({
                                 <p className="text-[11px] text-cyan-600 dark:text-cyan-400">
                                   💡 {item.tips}
                                 </p>
+                                {targetDest && targetDest.boatFee > 0 && (
+                                  <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-[11px] text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100">
+                                    <p className="flex items-center gap-1.5 font-bold">
+                                      <Ship className="h-3.5 w-3.5" />
+                                      Akses darat + laut
+                                    </p>
+                                    <p className="mt-1">
+                                      Lanjutkan perjalanan darat ke dermaga, lalu naik perahu/kapal. Biaya perahu yang tercatat Rp {targetDest.boatFee.toLocaleString('id-ID')}; konfirmasi dermaga, jadwal, dan harga terbaru kepada pengelola.
+                                    </p>
+                                    <p className="mt-1 font-semibold">
+                                      Cek prakiraan cuaca dan kondisi ombak sebelum menyeberang. Peta tidak menampilkan jalur navigasi kapal.
+                                    </p>
+                                  </div>
+                                )}
                               </div>
 
                               <div className="flex items-center gap-2 sm:flex-col sm:items-end justify-between border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-200 dark:border-slate-700">
@@ -386,12 +421,22 @@ export const TripPlannerView: React.FC<TripPlannerViewProps> = ({
                                   Rp {item.estimatedCost.toLocaleString('id-ID')}
                                 </span>
                                 {targetDest && (
-                                  <button
-                                    onClick={() => onSelectDestination(targetDest)}
-                                    className="text-xs text-blue-600 dark:text-blue-400 font-semibold hover:underline"
-                                  >
-                                    Lihat Detail & Cuaca →
-                                  </button>
+                                  <div className="flex flex-col items-end gap-1">
+                                    <button
+                                      onClick={() => onSelectDestination(targetDest)}
+                                      className="text-xs text-blue-600 dark:text-blue-400 font-semibold hover:underline"
+                                    >
+                                      Lihat Detail & Cuaca →
+                                    </button>
+                                    <a
+                                      href={`https://www.openstreetmap.org/?mlat=${targetDest.coordinates.lat}&mlon=${targetDest.coordinates.lng}#map=14/${targetDest.coordinates.lat}/${targetDest.coordinates.lng}`}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-cyan-700 hover:underline dark:text-cyan-400"
+                                    >
+                                      Lihat di OpenStreetMap <ExternalLink className="h-3 w-3" />
+                                    </a>
+                                  </div>
                                 )}
                               </div>
                             </div>
@@ -412,7 +457,7 @@ export const TripPlannerView: React.FC<TripPlannerViewProps> = ({
                   Rencana Perjalanan Belum Dibuat
                 </h3>
                 <p className="text-xs text-slate-500 max-w-sm mt-1 mb-4">
-                  Ketik preferensi Anda di formulir sebelah kiri dan klik tombol "Susun Rencana AI Sekarang" untuk mendapatkan jadwal liburan pesisir anti-halusinasi.
+                  Ketik preferensi Anda di formulir sebelah kiri dan klik tombol "Susun Rencana AI Sekarang" untuk menyusun jadwal wisata berdasarkan katalog Localist.
                 </p>
                 <button
                   onClick={() => handleGenerate()}

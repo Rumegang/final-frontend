@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Destination, Region, Category } from '../types/destination';
-import { AuthUser, saveDestination, deleteDestination, deleteReview } from '../services/firebaseService';
+import { DESTINATION_CATEGORIES, Destination, Region, Category, isMarineCategory, REGIONS } from '../types/destination';
+import { saveDestination, deleteDestination, deleteReview } from '../services/firebaseService';
 import { 
   Shield, Plus, Edit3, Trash2, CheckCircle2, 
   MapPin, Star, AlertTriangle, Layers, MessageSquare, 
@@ -9,22 +9,17 @@ import {
 
 interface AdminDashboardProps {
   destinations: Destination[];
-  currentUser: AuthUser | null;
-  onLoginAsAdmin: () => void;
   onUpdateDestinations: (updated: Destination[]) => void;
-  onSelectDestination: (dest: Destination) => void;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   destinations,
-  currentUser,
-  onLoginAsAdmin,
-  onUpdateDestinations,
-  onSelectDestination
+  onUpdateDestinations
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<'destinations' | 'reviews'>('destinations');
   const [isEditingModalOpen, setIsEditingModalOpen] = useState<boolean>(false);
   const [editingDest, setEditingDest] = useState<Partial<Destination> | null>(null);
+  const [storageError, setStorageError] = useState<string | null>(null);
 
   // Form states for adding/editing destination
   const [formName, setFormName] = useState('');
@@ -44,9 +39,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Stats
   const totalReviews = destinations.reduce((sum, d) => sum + (d.reviews?.length || 0), 0);
-  const manadoCount = destinations.filter(d => d.region === 'Manado').length;
-  const bitungCount = destinations.filter(d => d.region === 'Bitung').length;
-  const minutCount = destinations.filter(d => d.region === 'Minahasa Utara').length;
+  const topRegions = REGIONS
+    .map(region => ({ region, count: destinations.filter(destination => destination.region === region).length }))
+    .filter(({ count }) => count > 0)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 3);
 
   const handleOpenAdd = () => {
     setEditingDest(null);
@@ -74,7 +71,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setFormDesc(dest.description);
     setFormLat(dest.coordinates.lat.toString());
     setFormLng(dest.coordinates.lng.toString());
-    setFormEntryFee(dest.entryFee.toString());
+    setFormEntryFee(dest.entryFee?.toString() ?? '');
     setFormBoatFee(dest.boatFee.toString());
     setFormGearFee(dest.gearRentFee.toString());
     setFormFamily(dest.isFamilyFriendly);
@@ -85,7 +82,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsEditingModalOpen(true);
   };
 
-  const handleSaveForm = (e: React.FormEvent) => {
+  const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault();
     const destId = editingDest?.id || `dest-${Date.now()}`;
     const newDest: Destination = {
@@ -98,7 +95,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         lat: parseFloat(formLat) || 1.5,
         lng: parseFloat(formLng) || 124.8
       },
-      entryFee: parseInt(formEntryFee) || 0,
+      entryFee: formEntryFee.trim() ? parseInt(formEntryFee, 10) : undefined,
       boatFee: parseInt(formBoatFee) || 0,
       gearRentFee: parseInt(formGearFee) || 0,
       isFamilyFriendly: formFamily,
@@ -113,28 +110,51 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       reviews: editingDest?.reviews || []
     };
 
-    const updated = saveDestination(newDest);
-    onUpdateDestinations(updated);
-    setIsEditingModalOpen(false);
-  };
-
-  const handleDeleteDest = (id: string, name: string) => {
-    if (window.confirm(`Yakin ingin menghapus objek wisata "${name}"?`)) {
-      const updated = deleteDestination(id);
+    try {
+      const updated = await saveDestination(newDest);
       onUpdateDestinations(updated);
+      setStorageError(null);
+      setIsEditingModalOpen(false);
+    } catch (error) {
+      console.error('Unable to save destination:', error);
+      setStorageError('Destinasi gagal disimpan ke Firebase. Periksa koneksi dan aturan akses.');
     }
   };
 
-  const handleModerateReview = (destId: string, reviewId: string) => {
+  const handleDeleteDest = async (id: string, name: string) => {
+    if (window.confirm(`Yakin ingin menghapus objek wisata "${name}"?`)) {
+      try {
+        const updated = await deleteDestination(id);
+        onUpdateDestinations(updated);
+        setStorageError(null);
+      } catch (error) {
+        console.error('Unable to delete destination:', error);
+        setStorageError('Destinasi gagal dihapus dari Firebase. Periksa koneksi dan aturan akses.');
+      }
+    }
+  };
+
+  const handleModerateReview = async (destId: string, reviewId: string) => {
     if (window.confirm('Hapus ulasan ini dari moderasi publik?')) {
-      const updated = deleteReview(destId, reviewId);
-      onUpdateDestinations(updated);
+      try {
+        const updated = await deleteReview(destId, reviewId);
+        onUpdateDestinations(updated);
+        setStorageError(null);
+      } catch (error) {
+        console.error('Unable to moderate review:', error);
+        setStorageError('Ulasan gagal dihapus dari Firebase. Periksa koneksi dan aturan akses.');
+      }
     }
   };
 
   return (
     <div className="w-full min-h-[calc(100vh-4rem)] bg-slate-50 dark:bg-slate-950 p-4 sm:p-6 lg:p-8">
       <div className="max-w-6xl mx-auto space-y-8">
+        {storageError && (
+          <p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
+            {storageError}
+          </p>
+        )}
         
         {/* Header & Admin Role Banner */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -148,19 +168,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </h1>
             </div>
             <p className="text-xs text-slate-500 mt-1">
-              Manajemen Data Master Objek Wisata Pesisir & Moderasi Ulasan Pengguna
+              Manajemen katalog destinasi Sulawesi Utara & moderasi ulasan pengguna
             </p>
           </div>
 
-          {!currentUser?.isAdmin && (
-            <button
-              onClick={onLoginAsAdmin}
-              className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-600 text-white shadow-md flex items-center gap-2 self-start"
-            >
-              <Shield className="w-4 h-4" />
-              <span>Aktifkan Hak Akses Admin</span>
-            </button>
-          )}
         </div>
 
         {/* Overview Stats Grid */}
@@ -184,9 +195,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <div className="p-4 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
             <span className="text-slate-400 text-xs font-semibold block">Sebaran Wilayah</span>
             <span className="text-xs font-bold text-slate-800 dark:text-slate-200 mt-1 block">
-              MND: {manadoCount} | BTG: {bitungCount}
+              {topRegions.map(({ region, count }) => `${region}: ${count}`).join(' • ') || 'Belum ada data'}
             </span>
-            <span className="text-[10px] text-slate-500">Minut: {minutCount} Destinasi</span>
+            <span className="text-[10px] text-slate-500">Destinasi per wilayah</span>
           </div>
 
           <div className="p-4 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
@@ -266,13 +277,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </span>
                       </td>
                       <td className="p-3.5 font-semibold text-slate-700 dark:text-slate-300">
-                        {dest.entryFee === 0 ? 'Gratis' : `Rp ${dest.entryFee.toLocaleString('id-ID')}`}
+                        {dest.entryFee == null ? 'Cek pengelola' : dest.entryFee === 0 ? 'Gratis' : `Rp ${dest.entryFee.toLocaleString('id-ID')}`}
                       </td>
                       <td className="p-3.5">
                         <div className="flex items-center gap-1 text-[10px]">
                           {dest.isFamilyFriendly && <span title="Ramah Anak">👶</span>}
                           {dest.isSnorkelingSpot && <span title="Spot Snorkeling">🤿</span>}
-                          <span className="text-slate-400">({dest.waveConditionDefault})</span>
+                          {isMarineCategory(dest.category) && (
+                            <span className="text-slate-400">({dest.waveConditionDefault})</span>
+                          )}
                         </div>
                       </td>
                       <td className="p-3.5">
@@ -403,9 +416,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       onChange={e => setFormRegion(e.target.value as Region)}
                       className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
                     >
-                      <option value="Manado">Manado</option>
-                      <option value="Bitung">Bitung</option>
-                      <option value="Minahasa Utara">Minahasa Utara</option>
+                      {REGIONS.map(region => (
+                        <option key={region} value={region}>{region}</option>
+                      ))}
                     </select>
                   </div>
 
@@ -418,11 +431,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       onChange={e => setFormCategory(e.target.value as Category)}
                       className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
                     >
-                      <option value="Pantai">Pantai</option>
-                      <option value="Pulau & Bawah Laut">Pulau & Bawah Laut</option>
-                      <option value="Spot Diving/Snorkeling">Spot Diving/Snorkeling</option>
-                      <option value="Ekowisata Mangrove">Ekowisata Mangrove</option>
-                      <option value="Kuliner Pesisir">Kuliner Pesisir</option>
+                      {DESTINATION_CATEGORIES.map(category => (
+                        <option key={category} value={category}>{category}</option>
+                      ))}
                     </select>
                   </div>
                 </div>

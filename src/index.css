@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {
   html, body, #root {
@@ -6,6 +7,278 @@
     margin: 0;
     padding: 0;
     font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  }
+}
+
+@keyframes login-rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes login-card-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes welcome-enter {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes login-float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes login-wave-drift {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-8%);
+  }
+}
+
+@keyframes login-bubble-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(20px) scale(0.8);
+  }
+  15% {
+    opacity: 0.65;
+  }
+  85% {
+    opacity: 0.4;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-110px) scale(1.15);
+  }
+}
+
+.login-scene {
+  background-image:
+    radial-gradient(ellipse at 50% 30%, rgba(34, 211, 238, 0.12), transparent 55%),
+    linear-gradient(180deg, #f8fafc 0%, #ecfeff 100%);
+}
+
+.dark .login-scene {
+  background-image:
+    radial-gradient(ellipse at 50% 30%, rgba(8, 145, 178, 0.18), transparent 58%),
+    linear-gradient(180deg, #020617 0%, #082f49 100%);
+}
+
+.login-glow {
+  position: absolute;
+  z-index: 0;
+  width: 18rem;
+  aspect-ratio: 1;
+  border-radius: 9999px;
+  filter: blur(70px);
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+.login-glow-one {
+  top: 12%;
+  left: -7rem;
+  background: #22d3ee;
+}
+
+.login-glow-two {
+  top: 25%;
+  right: -8rem;
+  background: #60a5fa;
+}
+
+.dark .login-glow {
+  opacity: 0.18;
+}
+
+.login-waves {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 0;
+  height: clamp(8rem, 24vh, 15rem);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.login-wave {
+  position: absolute;
+  bottom: 0;
+  width: 125%;
+  height: 100%;
+}
+
+.login-wave path {
+  fill: rgba(6, 182, 212, 0.1);
+}
+
+.login-wave-back {
+  left: 0;
+  animation: login-wave-drift 18s ease-in-out infinite alternate;
+}
+
+.login-wave-front {
+  right: 0;
+  width: 130%;
+  animation: login-wave-drift 24s ease-in-out infinite alternate-reverse;
+}
+
+.login-wave-front path {
+  fill: rgba(14, 165, 233, 0.11);
+}
+
+.dark .login-wave path {
+  fill: rgba(6, 182, 212, 0.12);
+}
+
+.dark .login-wave-front path {
+  fill: rgba(14, 165, 233, 0.15);
+}
+
+.login-bubble {
+  position: absolute;
+  bottom: 5rem;
+  z-index: 0;
+  width: 0.65rem;
+  aspect-ratio: 1;
+  border: 1px solid rgba(8, 145, 178, 0.22);
+  border-radius: 9999px;
+  background: rgba(34, 211, 238, 0.12);
+  animation: login-bubble-rise 8s ease-in infinite;
+  pointer-events: none;
+}
+
+.login-bubble-one {
+  left: 18%;
+}
+
+.login-bubble-two {
+  left: 72%;
+  width: 0.9rem;
+  animation-delay: 3s;
+}
+
+.login-bubble-three {
+  left: 86%;
+  width: 0.45rem;
+  animation-delay: 5.5s;
+}
+
+.login-brand {
+  animation: login-rise 500ms ease-out both;
+}
+
+.login-brand-icon {
+  animation: login-float 4s ease-in-out 700ms infinite;
+}
+
+.login-heading {
+  animation: login-rise 600ms ease-out 100ms both;
+}
+
+.welcome-content {
+  animation: welcome-enter 750ms ease-out both;
+}
+
+.welcome-cta {
+  animation: welcome-enter 700ms ease-out 180ms both;
+}
+
+.welcome-highlight {
+  animation: login-card-enter 600ms ease-out both;
+  transition: transform 220ms ease, background-color 220ms ease;
+}
+
+.welcome-highlight:nth-child(2) {
+  animation-delay: 120ms;
+}
+
+.welcome-highlight:nth-child(3) {
+  animation-delay: 240ms;
+}
+
+.welcome-highlight:hover {
+  transform: translateY(-3px);
+}
+
+.login-content {
+  animation: welcome-enter 450ms ease-out both;
+}
+
+.login-card {
+  animation: login-card-enter 650ms ease-out both;
+  transition: transform 220ms ease, box-shadow 220ms ease, border-color 220ms ease;
+}
+
+.login-card-user {
+  animation-delay: 220ms;
+}
+
+.login-card-admin {
+  animation-delay: 360ms;
+}
+
+.login-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 22px 50px -28px rgba(8, 145, 178, 0.35);
+}
+
+.login-card-icon {
+  transition: transform 220ms ease;
+}
+
+.login-card:hover .login-card-icon {
+  transform: rotate(-6deg) scale(1.08);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-brand,
+  .login-brand-icon,
+  .login-heading,
+  .welcome-content,
+  .welcome-cta,
+  .welcome-highlight,
+  .login-content,
+  .login-card,
+  .login-wave,
+  .login-bubble {
+    animation: none;
+  }
+
+  .login-card,
+  .login-card-icon,
+  .welcome-highlight {
+    transition: none;
+  }
+
+  .login-card:hover,
+  .welcome-highlight:hover {
+    transform: none;
   }
 }
 

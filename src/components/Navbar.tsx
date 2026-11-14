@@ -1,13 +1,11 @@
 import React from 'react';
-import { Waves, MapPin, Sparkles, MessageSquare, Heart, Shield, Sun, Moon, LogIn, LogOut, User as UserIcon } from 'lucide-react';
+import { Waves, MapPin, Sparkles, MessageSquare, Heart, Sun, Moon, LogOut } from 'lucide-react';
 import { AuthUser } from '../services/firebaseService';
 
 interface NavbarProps {
-  activeTab: 'map' | 'planner' | 'chatbot' | 'saved' | 'admin';
-  setActiveTab: (tab: 'map' | 'planner' | 'chatbot' | 'saved' | 'admin') => void;
+  activeTab: 'map' | 'planner' | 'chatbot' | 'saved';
+  setActiveTab: (tab: 'map' | 'planner' | 'chatbot' | 'saved') => void;
   currentUser: AuthUser | null;
-  onLogin: () => void;
-  onAdminLogin: () => void;
   onLogout: () => void;
   isDark: boolean;
   setIsDark: (dark: boolean) => void;
@@ -18,8 +16,6 @@ export const Navbar: React.FC<NavbarProps> = ({
   activeTab,
   setActiveTab,
   currentUser,
-  onLogin,
-  onAdminLogin,
   onLogout,
   isDark,
   setIsDark,
@@ -40,14 +36,14 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div>
               <div className="flex items-center gap-1.5">
                 <span className="font-extrabold text-xl tracking-tight bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 bg-clip-text text-transparent">
-                  PesisirKu
+                  Localist
                 </span>
                 <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-cyan-100 text-cyan-700 dark:bg-cyan-950 dark:text-cyan-300 border border-cyan-300 dark:border-cyan-800">
                   {destinationsCount}+ Wisata
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium hidden sm:block">
-                Manado • Bitung • Minahasa Utara
+                Jelajahi Sulawesi Utara
               </p>
             </div>
           </div>
@@ -102,17 +98,6 @@ export const Navbar: React.FC<NavbarProps> = ({
               Favorit & Rencana
             </button>
 
-            <button
-              onClick={() => setActiveTab('admin')}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-semibold transition-all ${
-                activeTab === 'admin'
-                  ? 'bg-slate-800 text-white dark:bg-slate-700'
-                  : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-              }`}
-            >
-              <Shield className="w-4 h-4" />
-              Dashboard Admin
-            </button>
           </nav>
 
           {/* Action buttons (Dark mode & Auth) */}
@@ -158,25 +143,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <LogOut className="w-4 h-4" />
                 </button>
               </div>
-            ) : (
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={onLogin}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs sm:text-sm font-semibold bg-cyan-600 hover:bg-cyan-700 text-white shadow-sm transition-all"
-                >
-                  <LogIn className="w-4 h-4" />
-                  <span>Masuk</span>
-                </button>
-                <button
-                  onClick={onAdminLogin}
-                  title="Masuk mode Administrator"
-                  className="p-2 rounded-xl text-xs font-medium text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 hidden sm:flex items-center gap-1"
-                >
-                  <Shield className="w-3.5 h-3.5" />
-                  <span>Admin</span>
-                </button>
-              </div>
-            )}
+            ) : null}
           </div>
         </div>
 
@@ -209,13 +176,6 @@ export const Navbar: React.FC<NavbarProps> = ({
           >
             <Heart className="w-4 h-4" />
             <span>Favorit</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('admin')}
-            className={`flex flex-col items-center gap-1 ${activeTab === 'admin' ? 'text-slate-900 dark:text-white font-bold' : 'text-slate-500'}`}
-          >
-            <Shield className="w-4 h-4" />
-            <span>Admin</span>
           </button>
         </div>
       </div>

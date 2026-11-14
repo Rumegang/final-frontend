@@ -1,11 +1,36 @@
-export type Region = 'Manado' | 'Bitung' | 'Minahasa Utara';
+export const REGIONS = [
+  'Manado',
+  'Bitung',
+  'Tomohon',
+  'Kotamobagu',
+  'Minahasa',
+  'Minahasa Selatan',
+  'Minahasa Tenggara',
+  'Minahasa Utara',
+  'Bolaang Mongondow',
+  'Bolaang Mongondow Utara',
+  'Bolaang Mongondow Selatan',
+  'Bolaang Mongondow Timur',
+  'Kepulauan Sangihe',
+  'Kepulauan Talaud',
+  'Kepulauan Siau Tagulandang Biaro'
+] as const;
 
-export type Category = 
-  | 'Pantai'
-  | 'Pulau & Bawah Laut'
-  | 'Ekowisata Mangrove'
-  | 'Spot Diving/Snorkeling'
-  | 'Kuliner Pesisir';
+export type Region = typeof REGIONS[number];
+
+export const DESTINATION_CATEGORIES = [
+  'Pantai',
+  'Pulau & Bawah Laut',
+  'Ekowisata Mangrove',
+  'Spot Diving/Snorkeling',
+  'Kuliner Pesisir',
+  'Gunung & Pendakian',
+  'Air Terjun',
+  'Danau',
+  'Budaya & Sejarah'
+] as const;
+
+export type Category = typeof DESTINATION_CATEGORIES[number];
 
 export interface DestinationReview {
   id: string;
@@ -36,7 +61,7 @@ export interface Destination {
     lat: number;
     lng: number;
   };
-  entryFee: number; // in IDR
+  entryFee?: number; // in IDR; omitted when the current rate is unverified
   boatFee: number; // in IDR (0 if not needed)
   gearRentFee: number; // in IDR
   isFamilyFriendly: boolean;
@@ -55,6 +80,16 @@ export interface Destination {
     lastGenerated: string;
   };
   reviews?: DestinationReview[];
+}
+
+export function isMarineCategory(category: Category): boolean {
+  return [
+    'Pantai',
+    'Pulau & Bawah Laut',
+    'Ekowisata Mangrove',
+    'Spot Diving/Snorkeling',
+    'Kuliner Pesisir'
+  ].includes(category);
 }
 
 export interface UserTripQuery {

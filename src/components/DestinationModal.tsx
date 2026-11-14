@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Destination, DestinationReview } from '../types/destination';
+import { Destination, DestinationReview, isMarineCategory } from '../types/destination';
 import { 
   getDestinationWeatherAndMarine, 
   WeatherMarineDetail 
@@ -39,6 +39,7 @@ export const DestinationModal: React.FC<DestinationModalProps> = ({
   onToggleFavorite
 }) => {
   if (!destination) return null;
+  const isMarineDestination = isMarineCategory(destination.category);
 
   // Weather & Marine State
   const [weatherData, setWeatherData] = useState<WeatherMarineDetail | null>(null);
@@ -53,6 +54,7 @@ export const DestinationModal: React.FC<DestinationModalProps> = ({
   const [rating, setRating] = useState<number>(5);
   const [comment, setComment] = useState<string>('');
   const [isSubmittingReview, setIsSubmittingReview] = useState<boolean>(false);
+  const [reviewStorageError, setReviewStorageError] = useState<string | null>(null);
 
   // Fetch Open-Meteo REST API whenever destination changes
   useEffect(() => {
@@ -80,7 +82,7 @@ export const DestinationModal: React.FC<DestinationModalProps> = ({
   }, [destination.id]);
 
   // Handle Review Submission
-  const handleSubmitReview = (e: React.FormEvent) => {
+  const handleSubmitReview = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) {
       onLoginRequest();
@@ -89,21 +91,34 @@ export const DestinationModal: React.FC<DestinationModalProps> = ({
     if (!comment.trim()) return;
 
     setIsSubmittingReview(true);
-    const updatedDestinations = addDestinationReview(destination.id, currentUser, rating, comment);
-    const updated = updatedDestinations.find(d => d.id === destination.id);
-    if (updated) {
-      onUpdateDestination(updated);
+    try {
+      const updatedDestinations = await addDestinationReview(destination.id, currentUser, rating, comment);
+      const updated = updatedDestinations.find(d => d.id === destination.id);
+      if (updated) {
+        onUpdateDestination(updated);
+      }
+      setComment('');
+      setReviewStorageError(null);
+    } catch (error) {
+      console.error('Unable to save destination review:', error);
+      setReviewStorageError('Ulasan gagal disimpan ke Firebase. Periksa koneksi dan aturan akses.');
+    } finally {
+      setIsSubmittingReview(false);
     }
-    setComment('');
-    setIsSubmittingReview(false);
   };
 
   // Handle Review Deletion (Admin moderation or author)
-  const handleDeleteReview = (reviewId: string) => {
-    const updatedDestinations = deleteReview(destination.id, reviewId);
-    const updated = updatedDestinations.find(d => d.id === destination.id);
-    if (updated) {
-      onUpdateDestination(updated);
+  const handleDeleteReview = async (reviewId: string) => {
+    try {
+      const updatedDestinations = await deleteReview(destination.id, reviewId);
+      const updated = updatedDestinations.find(d => d.id === destination.id);
+      if (updated) {
+        onUpdateDestination(updated);
+      }
+      setReviewStorageError(null);
+    } catch (error) {
+      console.error('Unable to delete destination review:', error);
+      setReviewStorageError('Ulasan gagal dihapus dari Firebase. Periksa koneksi dan aturan akses.');
     }
   };
 
@@ -201,30 +216,45 @@ export const DestinationModal: React.FC<DestinationModalProps> = ({
             <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800">
               <span className="text-xs text-slate-400 font-medium block">Tiket Masuk</span>
               <span className="text-sm font-bold text-slate-800 dark:text-slate-100">
-                {destination.entryFee === 0 ? 'Gratis' : `Rp ${destination.entryFee.toLocaleString('id-ID')}`}
+                {destination.entryFee == null ? 'Cek pengelola' : destination.entryFee === 0 ? 'Gratis' : `Rp ${destination.entryFee.toLocaleString('id-ID')}`}
               </span>
             </div>
 
-            <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800">
-              <span className="text-xs text-slate-400 font-medium block">Sewa Perahu</span>
-              <span className="text-sm font-bold text-slate-800 dark:text-slate-100">
-                {destination.boatFee > 0 ? `Rp ${destination.boatFee.toLocaleString('id-ID')}` : 'Tidak Perlu'}
-              </span>
-            </div>
+            {isMarineDestination ? (
+              <>
+                <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800">
+                  <span className="text-xs text-slate-400 font-medium block">Sewa Perahu</span>
+                  <span className="text-sm font-bold text-slate-800 dark:text-slate-100">
+                    {destination.boatFee > 0 ? `Rp ${destination.boatFee.toLocaleString('id-ID')}` : 'Tidak Perlu'}
+                  </span>
+                </div>
 
-            <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800">
-              <span className="text-xs text-slate-400 font-medium block">Alat Snorkel</span>
-              <span className="text-sm font-bold text-slate-800 dark:text-slate-100">
-                {destination.gearRentFee > 0 ? `Rp ${destination.gearRentFee.toLocaleString('id-ID')}` : 'Bawa Sendiri'}
-              </span>
-            </div>
+                <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800">
+                  <span className="text-xs text-slate-400 font-medium block">Alat Snorkel</span>
+                  <span className="text-sm font-bold text-slate-800 dark:text-slate-100">
+                    {destination.gearRentFee > 0 ? `Rp ${destination.gearRentFee.toLocaleString('id-ID')}` : 'Bawa Sendiri'}
+                  </span>
+                </div>
 
-            <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800">
-              <span className="text-xs text-slate-400 font-medium block">Kondisi Ombak</span>
-              <span className="text-sm font-bold text-cyan-600 dark:text-cyan-400">
-                {destination.waveConditionDefault}
-              </span>
-            </div>
+                <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800">
+                  <span className="text-xs text-slate-400 font-medium block">Kondisi Ombak</span>
+                  <span className="text-sm font-bold text-cyan-600 dark:text-cyan-400">
+                    {destination.waveConditionDefault}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800">
+                  <span className="text-xs text-slate-400 font-medium block">Wilayah</span>
+                  <span className="text-sm font-bold text-slate-800 dark:text-slate-100">{destination.region}</span>
+                </div>
+                <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800">
+                  <span className="text-xs text-slate-400 font-medium block">Waktu Kunjungan</span>
+                  <span className="text-sm font-bold text-slate-800 dark:text-slate-100">{destination.bestTimeToVisit}</span>
+                </div>
+              </>
+            )}
           </div>
 
           {/* Description */}
@@ -244,19 +274,19 @@ export const DestinationModal: React.FC<DestinationModalProps> = ({
                 </div>
                 <div>
                   <h4 className="text-sm font-bold text-slate-800 dark:text-white flex items-center gap-2">
-                    Kondisi Cuaca & Gelombang Laut Realtime
+                    {isMarineDestination ? 'Kondisi Cuaca & Gelombang Laut Realtime' : 'Cuaca Lokal Realtime'}
                     <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-cyan-200 dark:bg-cyan-900 text-cyan-800 dark:text-cyan-300">
                       Open-Meteo REST API
                     </span>
                   </h4>
                   <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Data laut langsung dari koordinat {destination.coordinates.lat.toFixed(4)}, {destination.coordinates.lng.toFixed(4)}
+                    Data cuaca dari koordinat {destination.coordinates.lat.toFixed(4)}, {destination.coordinates.lng.toFixed(4)}
                   </p>
                 </div>
               </div>
 
               {/* Marine Safety Badge */}
-              {weatherData && (
+              {isMarineDestination && weatherData && (
                 <div className={`px-3 py-1.5 rounded-xl font-extrabold text-xs flex items-center gap-1.5 shadow-sm ${
                   weatherData.safetyLevel === 'AMAN'
                     ? 'bg-emerald-600 text-white'
@@ -276,17 +306,19 @@ export const DestinationModal: React.FC<DestinationModalProps> = ({
 
             {isLoadingWeather ? (
               <div className="py-4 text-center text-xs text-slate-500">
-                Memuat data oseanografi & cuaca Open-Meteo...
+                Memuat data cuaca lokal Open-Meteo...
               </div>
             ) : weatherData ? (
               <div className="space-y-3">
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
-                  <div className="p-2.5 rounded-xl bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm">
+                <div className={`grid grid-cols-2 ${isMarineDestination ? 'sm:grid-cols-4' : 'sm:grid-cols-3'} gap-2 text-center`}>
+                  {isMarineDestination && (
+                    <div className="p-2.5 rounded-xl bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm">
                     <span className="text-[11px] text-slate-400 block">Tinggi Gelombang</span>
                     <span className="text-base font-extrabold text-cyan-600 dark:text-cyan-400">
                       {weatherData.waveHeight} Meter
                     </span>
                   </div>
+                  )}
 
                   <div className="p-2.5 rounded-xl bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm">
                     <span className="text-[11px] text-slate-400 block">Kecepatan Angin</span>
@@ -310,18 +342,19 @@ export const DestinationModal: React.FC<DestinationModalProps> = ({
                   </div>
                 </div>
 
-                {/* AI Marine Advisory Explanation */}
-                <div className="p-3 rounded-2xl bg-white/90 dark:bg-slate-900/90 border border-cyan-100 dark:border-slate-700/60 flex items-start gap-2.5 text-xs">
-                  <Sparkles className="w-4 h-4 text-cyan-600 flex-shrink-0 mt-0.5" />
-                  <div>
-                    <span className="font-bold text-slate-800 dark:text-slate-200">
-                      Analisis Kelautan AI:
-                    </span>{' '}
-                    <span className="text-slate-600 dark:text-slate-300">
-                      {aiAdvisory || weatherData.safetyRecommendation}
-                    </span>
+                {isMarineDestination && (
+                  <div className="p-3 rounded-2xl bg-white/90 dark:bg-slate-900/90 border border-cyan-100 dark:border-slate-700/60 flex items-start gap-2.5 text-xs">
+                    <Sparkles className="w-4 h-4 text-cyan-600 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-bold text-slate-800 dark:text-slate-200">
+                        Analisis Kelautan AI:
+                      </span>{' '}
+                      <span className="text-slate-600 dark:text-slate-300">
+                        {aiAdvisory || weatherData.safetyRecommendation}
+                      </span>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             ) : null}
           </div>
@@ -464,6 +497,12 @@ export const DestinationModal: React.FC<DestinationModalProps> = ({
                 </button>
               </div>
             </form>
+
+            {reviewStorageError && (
+              <p role="alert" className="mt-3 rounded-xl bg-rose-50 p-3 text-xs text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
+                {reviewStorageError}
+              </p>
+            )}
 
             {/* Reviews List */}
             <div className="space-y-3">

@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import { Destination, Category } from '../types/destination';
+import { DESTINATION_CATEGORIES, Destination, Category, isMarineCategory, REGIONS } from '../types/destination';
 import { 
-  Navigation, Search, Star, Car, Info, MapPin, 
-  List, Map as MapIcon, ChevronLeft, Heart
+  Navigation, Search, Star, Car, Ship, Info, MapPin,
+  List, Map as MapIcon, ChevronLeft, Heart, ExternalLink
 } from 'lucide-react';
 
 interface MapViewProps {
@@ -52,6 +52,18 @@ function createCategoryIcon(category: Category, isSelected: boolean = false) {
   } else if (category === 'Kuliner Pesisir') {
     bgColor = '#ea580c'; // orange
     iconSvg = '🐟';
+  } else if (category === 'Gunung & Pendakian') {
+    bgColor = '#475569';
+    iconSvg = '⛰️';
+  } else if (category === 'Air Terjun') {
+    bgColor = '#0284c7';
+    iconSvg = '💧';
+  } else if (category === 'Danau') {
+    bgColor = '#0f766e';
+    iconSvg = '🌊';
+  } else if (category === 'Budaya & Sejarah') {
+    bgColor = '#a16207';
+    iconSvg = '🏛️';
   }
 
   const size = isSelected ? 46 : 36;
@@ -102,13 +114,25 @@ const userLocationIcon = L.divIcon({
   iconAnchor: [12, 12]
 });
 
+const CATEGORY_ICONS: Record<Category, string> = {
+  'Pantai': '🏖️',
+  'Pulau & Bawah Laut': '🏝️',
+  'Ekowisata Mangrove': '🌿',
+  'Spot Diving/Snorkeling': '🤿',
+  'Kuliner Pesisir': '🐟',
+  'Gunung & Pendakian': '⛰️',
+  'Air Terjun': '💧',
+  'Danau': '🌊',
+  'Budaya & Sejarah': '🏛️'
+};
+
 const CATEGORIES: { label: string; value: string; icon: string }[] = [
   { label: 'Semua', value: 'Semua', icon: '✨' },
-  { label: 'Pantai', value: 'Pantai', icon: '🏖️' },
-  { label: 'Pulau & Bawah Laut', value: 'Pulau & Bawah Laut', icon: '🏝️' },
-  { label: 'Spot Diving/Snorkeling', value: 'Spot Diving/Snorkeling', icon: '🤿' },
-  { label: 'Ekowisata Mangrove', value: 'Ekowisata Mangrove', icon: '🌿' },
-  { label: 'Kuliner Pesisir', value: 'Kuliner Pesisir', icon: '🐟' },
+  ...DESTINATION_CATEGORIES.map(category => ({
+    label: category,
+    value: category,
+    icon: CATEGORY_ICONS[category]
+  }))
 ];
 
 export const MapView: React.FC<MapViewProps> = ({
@@ -117,10 +141,9 @@ export const MapView: React.FC<MapViewProps> = ({
   favorites,
   onToggleFavorite
 }) => {
-  // Center of North Sulawesi Triangle (Manado - Bitung - Minut)
-  const defaultCenter: [number, number] = [1.535, 124.96];
+  const defaultCenter: [number, number] = [1.75, 124.6];
   const [mapCenter, setMapCenter] = useState<[number, number]>(defaultCenter);
-  const [mapZoom, setMapZoom] = useState<number>(10);
+  const [mapZoom, setMapZoom] = useState<number>(7);
 
   // Filters
   const [selectedRegion, setSelectedRegion] = useState<string>('Semua');
@@ -141,7 +164,7 @@ export const MapView: React.FC<MapViewProps> = ({
   // Routing State
   const [userLocation, setUserLocation] = useState<[number, number]>([1.4748, 124.8428]); // Default: Manado Zero Point
   const [activeRoute, setActiveRoute] = useState<[number, number][] | null>(null);
-  const [routeInfo, setRouteInfo] = useState<{ distanceKm: number; durationMin: number; destName: string } | null>(null);
+  const [routeInfo, setRouteInfo] = useState<{ distanceKm: number; durationMin: number; destName: string; boatFee: number } | null>(null);
   const [isRoutingLoading, setIsRoutingLoading] = useState<boolean>(false);
 
   // Get real user GPS location if permitted
@@ -180,6 +203,19 @@ export const MapView: React.FC<MapViewProps> = ({
     try {
       const [startLat, startLng] = userLocation;
       const { lat: endLat, lng: endLng } = dest.coordinates;
+
+      if (dest.boatFee > 0) {
+        setActiveRoute(null);
+        setRouteInfo({
+          distanceKm: 0,
+          durationMin: 0,
+          destName: dest.name,
+          boatFee: dest.boatFee
+        });
+        setMapCenter([endLat, endLng]);
+        setMapZoom(12);
+        return;
+      }
       
       const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${startLng},${startLat};${endLng},${endLat}?overview=full&geometries=geojson`;
       const res = await fetch(osrmUrl);
@@ -194,7 +230,8 @@ export const MapView: React.FC<MapViewProps> = ({
         setRouteInfo({
           distanceKm: Math.round((route.distance / 1000) * 10) / 10,
           durationMin: Math.round(route.duration / 60),
-          destName: dest.name
+          destName: dest.name,
+          boatFee: dest.boatFee
         });
         setMapCenter([(startLat + endLat) / 2, (startLng + endLng) / 2]);
         setMapZoom(11);
@@ -204,7 +241,8 @@ export const MapView: React.FC<MapViewProps> = ({
         setRouteInfo({
           distanceKm: 25,
           durationMin: 45,
-          destName: dest.name
+          destName: dest.name,
+          boatFee: dest.boatFee
         });
       }
     } catch (e) {
@@ -350,7 +388,7 @@ export const MapView: React.FC<MapViewProps> = ({
           <div className="flex items-center justify-between gap-1 pt-1 border-t border-slate-200/60 dark:border-slate-800">
             {/* Region Buttons */}
             <div className="flex items-center gap-1 overflow-x-auto scrollbar-none">
-              {['Semua', 'Manado', 'Bitung', 'Minahasa Utara'].map(reg => (
+              {['Semua', ...REGIONS].map(reg => (
                 <button
                   key={reg}
                   onClick={() => setSelectedRegion(reg)}
@@ -475,7 +513,7 @@ export const MapView: React.FC<MapViewProps> = ({
                           <span>📍 {dest.region}</span>
                           <span>•</span>
                           <span className="font-medium text-slate-700 dark:text-slate-300">
-                            {dest.entryFee === 0 ? 'Gratis' : `Rp ${dest.entryFee.toLocaleString('id-ID')}`}
+                            {dest.entryFee == null ? 'Cek pengelola' : dest.entryFee === 0 ? 'Gratis' : `Rp ${dest.entryFee.toLocaleString('id-ID')}`}
                           </span>
                         </div>
                       </div>
@@ -565,10 +603,10 @@ export const MapView: React.FC<MapViewProps> = ({
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-2">
                 <div className="p-2 bg-cyan-100 dark:bg-cyan-950 text-cyan-600 dark:text-cyan-400 rounded-xl">
-                  <Car className="w-5 h-5" />
+                  {routeInfo.boatFee > 0 ? <Ship className="w-5 h-5" /> : <Car className="w-5 h-5" />}
                 </div>
                 <div>
-                  <h4 className="text-xs text-slate-500 dark:text-slate-400 font-medium">Navigasi Rute Aktif</h4>
+                  <h4 className="text-xs text-slate-500 dark:text-slate-400 font-medium">Rekomendasi Perjalanan</h4>
                   <p className="text-sm font-bold text-slate-800 dark:text-white line-clamp-1">{routeInfo.destName}</p>
                 </div>
               </div>
@@ -579,20 +617,38 @@ export const MapView: React.FC<MapViewProps> = ({
                 Tutup
               </button>
             </div>
-            <div className="mt-3 flex items-center justify-between text-xs bg-slate-50 dark:bg-slate-800/60 p-2.5 rounded-xl">
-              <div>
-                <span className="text-slate-400 block text-[10px]">Jarak Estimasi</span>
-                <span className="text-sm font-bold text-cyan-600 dark:text-cyan-400">{routeInfo.distanceKm} km</span>
+            {routeInfo.boatFee > 0 ? (
+              <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100">
+                <p className="flex items-center gap-1.5 font-bold"><Ship className="h-4 w-4" /> Akses darat + laut</p>
+                <p className="mt-1.5 leading-relaxed">
+                  Destinasi ini memerlukan perjalanan darat ke dermaga, lalu dilanjutkan dengan perahu/kapal. Biaya perahu yang tercatat: <strong>Rp {routeInfo.boatFee.toLocaleString('id-ID')}</strong>.
+                </p>
+                <p className="mt-1 leading-relaxed">Konfirmasi dermaga, jadwal dan harga terbaru kepada pengelola. Periksa cuaca serta kondisi ombak sebelum menyeberang. Garis rute hanya menampilkan jalur darat, bukan jalur laut.</p>
+                <a
+                  href={`https://www.openstreetmap.org/?mlat=${mapCenter[0]}&mlon=${mapCenter[1]}#map=13/${mapCenter[0]}/${mapCenter[1]}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-2 inline-flex items-center gap-1 font-bold text-cyan-800 hover:underline dark:text-cyan-300"
+                >
+                  Lihat lokasi destinasi <ExternalLink className="h-3 w-3" />
+                </a>
               </div>
-              <div>
-                <span className="text-slate-400 block text-[10px]">Waktu Tempuh Mobil/Motor</span>
-                <span className="text-sm font-bold text-indigo-600 dark:text-indigo-400">~{routeInfo.durationMin} Menit</span>
+            ) : (
+              <div className="mt-3 flex items-center justify-between text-xs bg-slate-50 dark:bg-slate-800/60 p-2.5 rounded-xl">
+                <div>
+                  <span className="text-slate-400 block text-[10px]">Jarak Estimasi</span>
+                  <span className="text-sm font-bold text-cyan-600 dark:text-cyan-400">{routeInfo.distanceKm} km</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px]">Waktu Tempuh Darat</span>
+                  <span className="text-sm font-bold text-indigo-600 dark:text-indigo-400">~{routeInfo.durationMin} Menit</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px]">Titik Awal</span>
+                  <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">Lokasi Anda</span>
+                </div>
               </div>
-              <div>
-                <span className="text-slate-400 block text-[10px]">Titik Awal</span>
-                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">Pusat Manado</span>
-              </div>
-            </div>
+            )}
           </div>
         )}
 
@@ -691,13 +747,15 @@ export const MapView: React.FC<MapViewProps> = ({
                         <div>
                           <span className="text-slate-400 block text-[9px]">Tiket Masuk</span>
                           <span className="font-bold text-slate-700 dark:text-slate-200">
-                            {dest.entryFee === 0 ? 'Gratis' : `Rp ${dest.entryFee.toLocaleString('id-ID')}`}
+                            {dest.entryFee == null ? 'Cek pengelola' : dest.entryFee === 0 ? 'Gratis' : `Rp ${dest.entryFee.toLocaleString('id-ID')}`}
                           </span>
                         </div>
                         <div>
-                          <span className="text-slate-400 block text-[9px]">Karakter Ombak</span>
+                          <span className="text-slate-400 block text-[9px]">
+                            {isMarineCategory(dest.category) ? 'Karakter Ombak' : 'Wilayah'}
+                          </span>
                           <span className="font-semibold text-cyan-600 dark:text-cyan-400">
-                            {dest.waveConditionDefault}
+                            {isMarineCategory(dest.category) ? dest.waveConditionDefault : dest.region}
                           </span>
                         </div>
                       </div>

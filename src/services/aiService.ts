@@ -1,4 +1,4 @@
-import { Destination, TripItinerary, UserTripQuery } from '../types/destination';
+import { Category, Destination, isMarineCategory, REGIONS, TripItinerary, UserTripQuery } from '../types/destination';
 import { WeatherMarineDetail } from './weatherService';
 
 // Fallback or user-supplied Gemini API key
@@ -73,7 +73,7 @@ export async function generateGroundedItinerary(
   });
 
   if (candidates.length === 0) {
-    candidates = allDestinations;
+    throw new Error('Belum ada destinasi yang cocok di wilayah dan preferensi ini. Pilih wilayah lain atau ubah preferensi ramah keluarga.');
   }
 
   // Prepare context data of valid destinations
@@ -82,7 +82,7 @@ export async function generateGroundedItinerary(
     name: d.name,
     region: d.region,
     category: d.category,
-    entryFee: d.entryFee,
+    entryFee: d.entryFee ?? 'Perlu konfirmasi dengan pengelola',
     boatFee: d.boatFee,
     gearRentFee: d.gearRentFee,
     isFamilyFriendly: d.isFamilyFriendly,
@@ -93,17 +93,18 @@ export async function generateGroundedItinerary(
   }));
 
   const systemInstruction = `
-Kamu adalah Sistem Cerdas "PesisirKu AI Trip Planner" untuk Sulawesi Utara (Manado, Bitung, Minahasa Utara).
+Kamu adalah Sistem Cerdas "Localist AI Trip Planner" untuk seluruh Sulawesi Utara.
 ATURAN UTAMA (ANTI-HALUSINASI / GROUNDED):
 1. KAMU HANYA BOLEH MEMILIH DESTINASI DARI KATALOG DATA BERIKUT.
 2. DILARANG membuat nama destinasi khayalan atau memalsukan harga tiket/sewa perahu.
 3. Sesuaikan dengan batasan budget pengguna: Rp ${userQuery.budget.toLocaleString('id-ID')} dan durasi: ${userQuery.days} hari.
-4. Perhitungkan perkiraan biaya tiket masuk, sewa perahu (jika ada), dan logistik.
-5. Format jawaban WAJIB HANYA berupa JSON valid (tanpa markdown backticks, tanpa text lain) dengan struktur:
+4. Perhitungkan biaya tiket dan transportasi hanya jika tercantum. Jika biaya belum terverifikasi, sebutkan bahwa pengguna perlu mengonfirmasi kepada pengelola.
+5. Pilih aktivitas sesuai kategori destinasi. Untuk gunung api, sarankan pemeriksaan status aktivitas dan akses resmi; untuk air terjun, perhatikan hujan dan kondisi jalur.
+6. Format jawaban WAJIB HANYA berupa JSON valid (tanpa markdown backticks, tanpa text lain) dengan struktur:
 {
   "title": "Nama Rencana Perjalanan",
   "rationale": "Alasan pemilihan destinasi berdasarkan preferensi pengguna",
-  "safetyAdvisory": "Saran keamanan pesisir dan laut untuk rute ini",
+  "safetyAdvisory": "Saran keselamatan perjalanan yang sesuai dengan tipe destinasi",
   "estimatedTotalCost": 450000,
   "days": [
     {
@@ -136,14 +137,14 @@ ${JSON.stringify(destinationCatalog, null, 2)}
 
     return {
       id: 'itin-' + Date.now(),
-      title: parsed.title || `Itinerary PesisirKu ${userQuery.days} Hari`,
+      title: parsed.title || `Itinerary Localist ${userQuery.days} Hari`,
       createdAt: new Date().toISOString(),
       querySummary: userInput,
       totalBudget: userQuery.budget,
       estimatedTotalCost: parsed.estimatedTotalCost || 0,
       days: parsed.days || [],
-      rationale: parsed.rationale || 'Disusun khusus dari basis data destinasi terverifikasi PesisirKu.',
-      safetyAdvisory: parsed.safetyAdvisory || 'Pantau perkiraan tinggi gelombang sebelum berlayar.'
+      rationale: parsed.rationale || 'Disusun dari katalog destinasi Localist di Sulawesi Utara.',
+      safetyAdvisory: parsed.safetyAdvisory || 'Periksa kondisi cuaca dan arahan pengelola sebelum berkunjung.'
     };
   } catch (err) {
     console.warn('Gemini API call skipped or failed, using Factual Algorithmic Grounded Synthesis:', err);
@@ -163,11 +164,28 @@ function generateDeterministicGroundedItinerary(
   const daysCount = Math.max(1, Math.min(userQuery.days, 4));
   const days: any[] = [];
   let currentTotalCost = 0;
+  const query = `${userInput} ${userQuery.customNotes || ''}`.toLowerCase();
+  const categoryTerms: Partial<Record<Category, string[]>> = {
+    'Gunung & Pendakian': ['gunung', 'mendaki', 'pendakian', 'kawah'],
+    'Air Terjun': ['air terjun', 'waterfall', 'curug'],
+    'Danau': ['danau', 'lake'],
+    'Pantai': ['pantai', 'pesisir'],
+    'Pulau & Bawah Laut': ['pulau', 'bawah laut'],
+    'Spot Diving/Snorkeling': ['diving', 'snorkeling', 'menyelam'],
+    'Ekowisata Mangrove': ['mangrove'],
+    'Kuliner Pesisir': ['kuliner', 'makan', 'makanan'],
+    'Budaya & Sejarah': ['budaya', 'sejarah', 'museum']
+  };
+  const requestedCategories = Object.entries(categoryTerms)
+    .filter(([, terms]) => terms?.some(term => query.includes(term)))
+    .map(([category]) => category);
 
   // Prioritize candidates matching user flags
   const sorted = [...candidates].sort((a, b) => {
     let scoreA = 0;
     let scoreB = 0;
+    if (requestedCategories.includes(a.category)) scoreA += 5;
+    if (requestedCategories.includes(b.category)) scoreB += 5;
     if (userQuery.likesSnorkeling) {
       if (a.isSnorkelingSpot) scoreA += 2;
       if (b.isSnorkelingSpot) scoreB += 2;
@@ -190,32 +208,38 @@ function generateDeterministicGroundedItinerary(
     const afternoonDest = sorted[destIndex % sorted.length];
     destIndex++;
 
-    const cost1 = morningDest.entryFee + (morningDest.boatFee > 0 ? 100000 : 0) + (userQuery.likesSnorkeling ? morningDest.gearRentFee : 0);
+    const cost1 = (morningDest.entryFee ?? 0) + (morningDest.boatFee > 0 ? 100000 : 0) + (userQuery.likesSnorkeling ? morningDest.gearRentFee : 0);
     dayCost += cost1;
     dayItems.push({
       time: '08:30 - 13:00 WITA',
       destinationId: morningDest.id,
       destinationName: morningDest.name,
-      activity: morningDest.isSnorkelingSpot ? 'Eksplorasi bawah laut dan snorkeling santai' : 'Menikmati panorama pantai dan wahana pesisir',
+      activity: getDestinationActivity(morningDest),
       estimatedCost: cost1,
-      tips: `Kondisi ombak rata-rata ${morningDest.waveConditionDefault}. Datang lebih pagi untuk air laut yang jernih.`
+      tips: morningDest.entryFee == null
+        ? 'Tiket atau biaya kunjungan belum terverifikasi; konfirmasi kepada pengelola sebelum berangkat.'
+        : isMarineCategory(morningDest.category)
+          ? `Kondisi ombak rata-rata ${morningDest.waveConditionDefault}. Periksa cuaca sebelum berangkat.`
+          : 'Periksa kondisi cuaca dan akses setempat sebelum berangkat.'
     });
 
-    const cost2 = afternoonDest.entryFee + (afternoonDest.category === 'Kuliner Pesisir' ? 75000 : 25000);
+    const cost2 = (afternoonDest.entryFee ?? 0) + (afternoonDest.category === 'Kuliner Pesisir' ? 75000 : 25000);
     dayCost += cost2;
     dayItems.push({
       time: '15:30 - 19:00 WITA',
       destinationId: afternoonDest.id,
       destinationName: afternoonDest.name,
-      activity: afternoonDest.category === 'Kuliner Pesisir' ? 'Menikmati hidangan laut segar sambil menyaksikan sunset pesisir' : 'Jalan sore di promenade pantai dan fotografi',
+      activity: getDestinationActivity(afternoonDest),
       estimatedCost: cost2,
-      tips: 'Waktu terbaik tiba menjelang matahari terbenam (sekitar pukul 17:00).'
+      tips: afternoonDest.entryFee == null
+        ? 'Tiket atau biaya kunjungan belum terverifikasi; konfirmasi kepada pengelola sebelum berangkat.'
+        : 'Periksa jam kunjungan dan kondisi akses sebelum berangkat.'
     });
 
     currentTotalCost += dayCost;
     days.push({
       dayNumber: d,
-      title: `Hari ke-${d}: Eksplorasi Pesisir ${morningDest.region}`,
+      title: `Hari ke-${d}: Eksplorasi ${morningDest.region}`,
       totalDayCost: dayCost,
       items: dayItems
     });
@@ -223,15 +247,37 @@ function generateDeterministicGroundedItinerary(
 
   return {
     id: 'itin-' + Date.now(),
-    title: `Rencana Wisata Pesisir ${daysCount} Hari (${userQuery.regions.join(', ') || 'Sulawesi Utara'})`,
+    title: `Rencana Wisata ${daysCount} Hari (${userQuery.regions.length === REGIONS.length ? 'Sulawesi Utara' : userQuery.regions.join(', ') || 'Sulawesi Utara'})`,
     createdAt: new Date().toISOString(),
     querySummary: userInput || `Trip ${daysCount} hari, budget Rp ${userQuery.budget.toLocaleString('id-ID')}`,
     totalBudget: userQuery.budget,
     estimatedTotalCost: currentTotalCost,
     days,
-    rationale: `Disusun berdasarkan preferensi ${userQuery.isFamilyWithChildren ? 'ramah keluarga/anak, ' : ''}${userQuery.likesSnorkeling ? 'gemar snorkeling, ' : ''}dan disesuaikan dengan batasan budget Rp ${userQuery.budget.toLocaleString('id-ID')}.`,
-    safetyAdvisory: 'Pastikan memeriksa cuaca Open-Meteo pada pagi hari keberangkatan perahu dan selalu gunakan pelampung saat snorkeling.'
+    rationale: `Disusun dari destinasi yang sesuai dengan kebutuhan perjalanan dan batasan budget Rp ${userQuery.budget.toLocaleString('id-ID')}. Estimasi tidak mencakup biaya yang belum terverifikasi.`,
+    safetyAdvisory: 'Periksa cuaca, status aktivitas gunung api, dan kondisi akses sebelum berangkat. Untuk perjalanan laut, konfirmasi jadwal dan kondisi gelombang kepada pengelola.'
   };
+}
+
+function getDestinationActivity(destination: Destination): string {
+  switch (destination.category) {
+    case 'Gunung & Pendakian':
+      return 'Menjelajahi kawasan pegunungan dengan mengikuti arahan keselamatan dan akses resmi';
+    case 'Air Terjun':
+      return 'Menikmati panorama air terjun dan menjaga jarak aman dari aliran air';
+    case 'Danau':
+      return 'Menikmati panorama danau dan suasana alam sekitar';
+    case 'Budaya & Sejarah':
+      return 'Mengenal situs budaya dan sejarah setempat';
+    case 'Kuliner Pesisir':
+      return 'Mencicipi kuliner lokal dan menikmati suasana kawasan';
+    case 'Spot Diving/Snorkeling':
+    case 'Pulau & Bawah Laut':
+      return 'Menjelajahi pulau dan menikmati aktivitas bawah laut sesuai kondisi';
+    case 'Ekowisata Mangrove':
+      return 'Menjelajahi kawasan mangrove dengan tetap menjaga ekosistem';
+    default:
+      return 'Menikmati panorama alam dan aktivitas wisata setempat';
+  }
 }
 
 /**
@@ -242,9 +288,9 @@ function generateDeterministicGroundedItinerary(
 function getManadoLocalFallbackResponse(userQuestion: string, relevantDestinations: Destination[]): string {
   const q = userQuestion.toLowerCase();
 
-  // 1. Kuliner khas Sulawesi Utara (Di luar katalog pesisir)
+  // 1. Kuliner khas Sulawesi Utara
   if (q.includes('tinutuan') || q.includes('bubur manado')) {
-    return `Wah, tinutuan (bubur khas Manado) itu pe sadap skali! Biarpun ini kuliner nyanda maso di list pesisir beranda, kita mo kase tau: kalo ngana mo cari tinutuan paling mantap, singgah jo di Jl. Wakeke (Kawasan Wisata Kuliner Tinutuan Manado). Di sana dapa makan tinutuan deng sayur kangkung, bayam, labu kuning, jagung, plus dabu-dabu roa deng tahu/nike crispy. Pe mantap kong bekeng badang hangat!`;
+    return `Wah, tinutuan (bubur khas Manado) itu pe sadap skali! Kalo ngana mo cari tinutuan paling mantap, singgah jo di Jl. Wakeke (Kawasan Wisata Kuliner Tinutuan Manado). Di sana dapa makan tinutuan deng sayur kangkung, bayam, labu kuning, jagung, plus dabu-dabu roa deng tahu/nike crispy. Pe mantap kong bekeng badang hangat!`;
   }
   if (q.includes('klappertaart') || q.includes('klapertart')) {
     return `Klappertaart itu pe manis legit deng gurih skali, kue khas peninggalan Belanda di Manado! Biar nyanda ada di list beranda, ngana bisa bli di toko oleh-oleh Jl. B.W. Lapian (Tikala) atau sepanjang Jl. Sam Ratulangi. Daging kelapa muda campur susu, kismis, kenari deng bubuk kayu manis, enak skali dimakan pas dingin!`;
@@ -261,7 +307,7 @@ function getManadoLocalFallbackResponse(userQuestion: string, relevantDestinatio
 
   // 2. Destinasi Wisata di Luar Pesisir (Pegunungan / Budaya / Danau)
   if (q.includes('tomohon') || q.includes('bunga') || q.includes('danau linow') || q.includes('linow') || q.includes('mahawu')) {
-    return `Halo kawan! Tomohon itu kota bunga di dataran tinggi, hawanya sejuk skali kira-kira 1 jam perjalanan dari Manado. Biar ini di luar list pesisir beranda, rekomendasi tempat paling gaga di sana:
+    return `Halo kawan! Tomohon itu kota bunga di dataran tinggi, hawanya sejuk skali kira-kira 1 jam perjalanan dari Manado. Beberapa tempat menarik di sana:
 1. **Danau Linow**: Aer danau bisa baoba warna (hijau, biru, kecokelatan) lantaran kandungan belerang, pe asri sambil ngopi di pinggir danau.
 2. **Gunung Mahawu**: Trekking ringan tangga beton langsung ke bibir kawah deng pemandangan Kota Tomohon deng Gunung Lokon.
 3. **Pasar Beriman Tomohon**: Pasar tradisional terkenal deng bunga segar dan kuliner ekstrim khas Minahasa.`;
@@ -287,22 +333,30 @@ function getManadoLocalFallbackResponse(userQuestion: string, relevantDestinatio
 
   // 4. Bahasa Manado & Salam
   if (q.includes('apa kabar') || q.includes('halo') || q.includes('hi') || q.includes('kiapa') || q.includes('pe gaga') || q.includes('torang')) {
-    return `Halo! Baik-baik skali kawan, salam hangat dari Sulawesi Utara! Torang di sini siap bantu ngana cari tau apa saja seputar wisata pesisir (pantai, diving, mangrove), tempat-tempat hits di Manado-Bitung-Minut, sampe makanan khas yang pe sadap. Ada yang ngana mo tanya?`;
+    return `Halo! Baik-baik skali kawan, salam hangat dari Sulawesi Utara! Torang di sini siap bantu ngana cari tau wisata pantai, gunung, air terjun, danau, budaya, kuliner, deng tempat-tempat hits di seluruh Sulut. Ada yang ngana mo tanya?`;
   }
 
   // 5. Destinasi terverifikasi dari katalog beranda (jika ada match)
   if (relevantDestinations.length > 0) {
     const top = relevantDestinations[0];
-    return `Iyo, ini ada di data resmi PesisirKu!\n\n**${top.name}** (${top.region})\n- **Kategori**: ${top.category}\n- **Tiket Masuk**: ${top.entryFee === 0 ? 'Gratis (Rp 0)' : 'Rp ' + top.entryFee.toLocaleString('id-ID')}\n- **Sewa Perahu**: ${top.boatFee > 0 ? 'Rp ' + top.boatFee.toLocaleString('id-ID') : 'Nyanda perlu perahu, bisa akses darat'}\n- **Ramah Anak**: ${top.isFamilyFriendly ? 'Iyo, aman voor keluarga/anak' : 'Perlu pengawasan ekstra'}\n- **Karakter Ombak**: ${top.waveConditionDefault}\n- **Keterangan**: ${top.description}\n\nFasilitas yang ada: ${top.facilities.join(', ')}.\n\nKalo ngana mo pi sana, jang lupa cek kondisi ombak deng cuaca dulu ne!`;
+    const fee = top.entryFee == null
+      ? 'Perlu konfirmasi dengan pengelola'
+      : top.entryFee === 0
+        ? 'Gratis (Rp 0)'
+        : `Rp ${top.entryFee.toLocaleString('id-ID')}`;
+    const marineDetails = isMarineCategory(top.category)
+      ? `\n- **Sewa Perahu**: ${top.boatFee > 0 ? 'Rp ' + top.boatFee.toLocaleString('id-ID') : 'Nyanda perlu perahu'}\n- **Karakter Ombak**: ${top.waveConditionDefault}`
+      : '';
+    return `Iyo, ini ada di katalog Localist!\n\n**${top.name}** (${top.region})\n- **Kategori**: ${top.category}\n- **Tiket Masuk**: ${fee}\n- **Ramah Anak**: ${top.isFamilyFriendly ? 'Iyo, cocok untuk keluarga' : 'Perlu pengawasan ekstra'}${marineDetails}\n- **Keterangan**: ${top.description}\n\nFasilitas yang tercatat: ${top.facilities.length ? top.facilities.join(', ') : 'Belum diverifikasi'}.\n\nKonfirmasi biaya dan kondisi akses kepada pengelola sebelum berangkat.`;
   }
 
   // 6. General Fallback
-  return `Halo bro/sis! Biarpun pertanyaan itu nyanda ada di daftar beranda resmi PesisirKu, torang asisten lokal Manado siap jawab apa saja seputar Sulawesi Utara. Ngana bisa tanya tentang:\n- Tempat wisata pegunungan atau danau (Tomohon, Danau Linow, Danau Tondano)\n- Kuliner sedap khas Manado (Tinutuan di Wakeke, Klappertaart, Cakalang Fufu, Pisang Goroho dabu-dabu)\n- Transportasi (Mikro, rute terminal, sewa perahu ke pulau)\n- Atau rekomendasi 33+ destinasi pantai, mangrove, deng spot diving PesisirKu!\n\nKira-kira apa yang ngana mo cari tau? Tanya jo!`;
+  return `Halo bro/sis! Torang asisten lokal Localist siap bantu info wisata di seluruh Sulawesi Utara. Ngana bisa tanya tentang pantai, gunung, air terjun, danau, budaya, kuliner, atau rekomendasi destinasi di katalog. Kira-kira apa yang ngana mo cari tau? Tanya jo!`;
 }
 
 /**
  * 2. CHATBOT RAG & ASISTEN BAHASA MANADO
- * Menggabungkan data terverifikasi PesisirKu dengan kemampuan menangani hal di luar katalog beranda
+ * Menggabungkan data katalog Localist dengan pengetahuan umum tentang Sulawesi Utara
  * menggunakan dialek Bahasa Manado yang hangat, ramah, dan solutif.
  */
 export async function askPesisirRAGChatbot(
@@ -322,7 +376,7 @@ export async function askPesisirRAGChatbot(
       (queryLower.includes('anak') && d.isFamilyFriendly) ||
       (queryLower.includes('pasir putih') && d.description.toLowerCase().includes('pasir putih')) ||
       (queryLower.includes('mangrove') && d.category === 'Ekowisata Mangrove') ||
-      (queryLower.includes('murah') && d.entryFee <= 10000)
+      (queryLower.includes('murah') && d.entryFee != null && d.entryFee <= 10000)
     );
   });
 
@@ -330,7 +384,7 @@ export async function askPesisirRAGChatbot(
     name: d.name,
     wilayah: d.region,
     kategori: d.category,
-    biaya_tiket: `Rp ${d.entryFee.toLocaleString('id-ID')}`,
+    biaya_tiket: d.entryFee == null ? 'Belum terverifikasi; konfirmasi kepada pengelola' : `Rp ${d.entryFee.toLocaleString('id-ID')}`,
     biaya_perahu: d.boatFee > 0 ? `Rp ${d.boatFee.toLocaleString('id-ID')}` : 'Tidak perlu perahu',
     ramah_anak: d.isFamilyFriendly ? 'Ya' : 'Kurang cocok balita',
     spot_snorkeling: d.isSnorkelingSpot ? 'Ya' : 'Bukan',
@@ -339,18 +393,18 @@ export async function askPesisirRAGChatbot(
   }));
 
   const systemPrompt = `
-Kamu adalah "PesisirKu AI Assistant", asisten pintar lokal Sulawesi Utara yang ramah, berwawasan luas, dan menguasai objek wisata, kuliner, budaya, dan rute di Manado, Bitung, Minahasa Utara, serta Sulawesi Utara secara umum.
+Kamu adalah "Localist AI Assistant", asisten pintar lokal yang membantu wisatawan menjelajahi seluruh Sulawesi Utara, termasuk objek alam, kuliner, budaya, dan rute.
 
 ATURAN BAHASA DAN GAYA MENJAWAB (PENTING):
 1. GUNAKAN BAHASA MANADO (dialek Melayu Manado) yang santun, hangat, dan komunikatif (seperti penggunaan kata 'torang', 'ngana', 'pe gaga', 'pe sadap', 'iyo', 'nyanda', 'jang lupa', 'kalo mo pi', dll.) sehingga pengunjung merasa akrab dan disambut hangat seperti oleh warga lokal Manado.
 2. JIKA PERTANYAAN TENTANG DESTINASI RESMI KATALOG (ada di konteks di bawah):
    - Gunakan fakta harga tiket, sewa perahu, ramah anak, dan fasilitas dari data resmi tersebut secara akurat, disajikan dengan bahasa Manado yang ramah.
 3. JIKA PERTANYAAN TENTANG SESUATU DI LUAR KATALOG BERANDA (misalnya: kuliner Tinutuan di Wakeke, Klappertaart, Cakalang Fufu, Danau Linow di Tomohon, Gunung Mahawu, Benteng Moraya, transportasi angkot mikro, budaya, hotel, dll.):
-   - JANGAN MENOLAK PERTANYAAN! DILARANG mengatakan "data resmi PesisirKu belum mencakup hal tersebut".
+   - JANGAN MENOLAK PERTANYAAN! Jika informasi spesifik belum tersedia, jelaskan keterbatasannya dan sarankan konfirmasi ke pengelola atau sumber resmi.
    - Jawablah dengan jelas, akurat, dan solutif berdasarkan pengetahuan luas tentang Sulawesi Utara dan Manado, dengan tetap menggunakan Bahasa Manado yang hangat.
    - Berikan rekomendasi terbaik, patokan lokasi, atau tips praktis bagi penanya.
 
-DATA KONTEKS RESMI PESISIRKU (SEBAGAI BASIS DESTINASI PESISIR):
+DATA KATALOG LOCALIST:
 ${JSON.stringify(selectedContext, null, 2)}
 `;
 
@@ -379,7 +433,7 @@ export async function generateAiReviewSummary(
 
   const reviewTexts = reviews.map(r => `[Rating: ${r.rating}/5] ${r.comment}`).join('\n');
   const systemPrompt = `
-Analisis ulasan pengunjung untuk destinasi pesisir "${destinationName}".
+Analisis ulasan pengunjung untuk destinasi wisata "${destinationName}".
 Ekstrak dalam format JSON murni:
 {
   "positivePoints": ["3 poin keunggulan utama yang paling sering dipuji"],
@@ -411,7 +465,7 @@ export async function getAiWeatherAdvisory(
   const prompt = `Jelaskan dalam 2-3 kalimat santai dan informatif apakah hari ini cocok untuk berenang/snorkeling di ${destinationName} berdasarkan kondisi gelombang laut ${weather.waveHeight} meter, kecepatan angin ${weather.windSpeed} km/jam, dan cuaca ${weather.weatherDesc}.`;
 
   try {
-    return await callGeminiRaw('Kamu adalah pemandu kelautan PesisirKu Sulawesi Utara.', prompt);
+    return await callGeminiRaw('Kamu adalah pemandu kelautan Localist Sulawesi Utara.', prompt);
   } catch (err) {
     if (weather.waveHeight >= 1.5) {
       return `Saat ini gelombang laut di ${destinationName} mencapai ${weather.waveHeight}m dengan angin ${weather.windSpeed} km/j. Sangat tidak disarankan untuk snorkeling maupun berlayar perahu kecil demi keselamatan.`;

@@ -10,6 +10,7 @@ interface SavedItinerariesViewProps {
   itineraries: TripItinerary[];
   destinations: Destination[];
   favorites: string[];
+  userId: string;
   onSelectDestination: (dest: Destination) => void;
   onRefreshSaved: () => void;
   onNavigateToPlanner: () => void;
@@ -19,25 +20,44 @@ export const SavedItinerariesView: React.FC<SavedItinerariesViewProps> = ({
   itineraries,
   destinations,
   favorites,
+  userId,
   onSelectDestination,
   onRefreshSaved,
   onNavigateToPlanner
 }) => {
+  const [storageError, setStorageError] = React.useState<string | null>(null);
   const favoriteDestinations = destinations.filter(d => favorites.includes(d.id));
 
-  const handleDeleteItinerary = (id: string) => {
-    deleteItinerary(id);
-    onRefreshSaved();
+  const handleDeleteItinerary = async (id: string) => {
+    try {
+      await deleteItinerary(id, userId);
+      setStorageError(null);
+      onRefreshSaved();
+    } catch (error) {
+      console.error('Unable to delete saved itinerary:', error);
+      setStorageError('Rencana tidak dapat dihapus dari Firebase. Periksa koneksi dan aturan akses.');
+    }
   };
 
-  const handleRemoveFavorite = (id: string) => {
-    toggleFavorite(id);
-    onRefreshSaved();
+  const handleRemoveFavorite = async (id: string) => {
+    try {
+      await toggleFavorite(id, userId);
+      setStorageError(null);
+      onRefreshSaved();
+    } catch (error) {
+      console.error('Unable to remove favorite:', error);
+      setStorageError('Favorit tidak dapat disinkronkan dengan Firebase. Periksa koneksi dan aturan akses.');
+    }
   };
 
   return (
     <div className="w-full min-h-[calc(100vh-4rem)] bg-slate-50 dark:bg-slate-950 p-4 sm:p-6 lg:p-8">
       <div className="max-w-6xl mx-auto space-y-8">
+        {storageError && (
+          <p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
+            {storageError}
+          </p>
+        )}
         
         {/* Section 1: Saved Itineraries */}
         <div>
@@ -65,7 +85,7 @@ export const SavedItinerariesView: React.FC<SavedItinerariesViewProps> = ({
               <BookmarkCheck className="w-10 h-10 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
               <h3 className="text-sm font-bold text-slate-700 dark:text-slate-300">Belum Ada Rencana Tersimpan</h3>
               <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                Gunakan fitur AI Trip Planner untuk menyusun dan menyimpan jadwal liburan pesisir Anda.
+                Gunakan fitur AI Trip Planner untuk menyusun dan menyimpan jadwal liburan Anda.
               </p>
             </div>
           ) : (
@@ -212,7 +232,7 @@ export const SavedItinerariesView: React.FC<SavedItinerariesViewProps> = ({
 
                     <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
                       <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                        {dest.entryFee === 0 ? 'Gratis' : `Rp ${dest.entryFee.toLocaleString('id-ID')}`}
+                        {dest.entryFee == null ? 'Cek pengelola' : dest.entryFee === 0 ? 'Gratis' : `Rp ${dest.entryFee.toLocaleString('id-ID')}`}
                       </span>
                       <button
                         onClick={() => onSelectDestination(dest)}
