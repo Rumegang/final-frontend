@@ -1,6 +1,7 @@
-import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
+import { FirebaseApp, initializeApp, getApps } from 'firebase/app';
+import { initializeAppCheck, ReCaptchaV3Provider } from 'firebase/app-check';
 import { getAuth, Auth, signInWithPopup, GoogleAuthProvider, signInWithEmailAndPassword, signOut, onAuthStateChanged, User } from 'firebase/auth';
-import { getFirestore, Firestore, collection, doc, setDoc, getDocs, deleteDoc, getDoc, query, where, writeBatch } from 'firebase/firestore';
+import { getFirestore, Firestore, collection, doc, setDoc, getDocs, getDocsFromServer, deleteDoc, getDoc, updateDoc, writeBatch } from 'firebase/firestore';
 import { Destination, DestinationReview, TripItinerary } from '../types/destination';
 import { EXPANDED_DESTINATIONS, INITIAL_DESTINATIONS } from '../data/destinations';
 
@@ -15,22 +16,107 @@ const firebaseConfig = {
   appId: env.VITE_FIREBASE_APP_ID || ''
 };
 
-let app: FirebaseApp | null = null;
+let firebaseApp: FirebaseApp | null = null;
 let auth: Auth | null = null;
 let db: Firestore | null = null;
+let firebaseInitializationError: unknown = null;
 
 export const isFirebaseConfigured = (): boolean => {
-  return Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
+  return Boolean(
+    firebaseConfig.apiKey
+    && firebaseConfig.authDomain
+    && firebaseConfig.projectId
+    && firebaseConfig.appId
+  );
 };
 
 if (isFirebaseConfigured()) {
   try {
-    app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
-    auth = getAuth(app);
-    db = getFirestore(app);
+    firebaseApp = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
+
+    const appCheckSiteKey = env.VITE_FIREBASE_APP_CHECK_SITE_KEY || '';
+    if (import.meta.env.DEV && typeof window !== 'undefined') {
+      (window as Window & { FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean }).FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+    }
+
+    if (import.meta.env.DEV || appCheckSiteKey) {
+      try {
+        initializeAppCheck(firebaseApp, {
+          provider: new ReCaptchaV3Provider(appCheckSiteKey || 'debug'),
+          isTokenAutoRefreshEnabled: true
+        });
+      } catch (err) {
+        console.error('Firebase App Check initialization failed:', err);
+      }
+    } else {
+      console.warn('Firebase App Check is not configured. Set VITE_FIREBASE_APP_CHECK_SITE_KEY for production AI requests.');
+    }
+
+    auth = getAuth(firebaseApp);
+    db = getFirestore(firebaseApp);
   } catch (err) {
-    console.warn('Firebase init error, fallback to LocalStorage mode:', err);
+    firebaseInitializationError = err;
+    console.error('Firebase initialization failed:', err);
   }
+}
+
+export function getFirebaseApp(): FirebaseApp {
+  if (firebaseApp) return firebaseApp;
+  if (!isFirebaseConfigured()) {
+    throw new Error('Firebase AI Logic belum dapat digunakan. Periksa variabel VITE_FIREBASE_* di file .env lalu mulai ulang aplikasi.');
+  }
+
+  const reason = firebaseInitializationError instanceof Error
+    ? ` ${firebaseInitializationError.message}`
+    : '';
+  throw new Error(`Firebase tidak berhasil diinisialisasi.${reason}`);
+}
+
+function requireFirestore(): Firestore {
+  if (db) return db;
+  if (!isFirebaseConfigured()) {
+    throw new Error('Firebase belum dikonfigurasi dengan lengkap. Periksa variabel VITE_FIREBASE_* di file .env lalu mulai ulang aplikasi.');
+  }
+
+  const reason = firebaseInitializationError instanceof Error
+    ? ` ${firebaseInitializationError.message}`
+    : '';
+  throw new Error(`Firestore tidak berhasil diinisialisasi.${reason}`);
+}
+
+export function getFirestoreErrorMessage(error: unknown): string {
+  const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+    ? error.code
+    : '';
+  const message = error instanceof Error ? error.message.toLowerCase() : '';
+
+  if (code === 'permission-denied') {
+    return 'Firestore menolak akses. Pastikan Rules sudah di-Publish dan email pada aturan admin sama dengan email akun yang sedang masuk.';
+  }
+  if (
+    code === 'unavailable'
+    || code === 'deadline-exceeded'
+    || message.includes('client is offline')
+    || message.includes('offline')
+    || message.includes('network')
+  ) {
+    return 'Aplikasi tidak dapat terhubung ke Firestore. Pastikan perangkat online, lalu muat ulang atau tekan Coba lagi. Jika tetap muncul, periksa koneksi yang memblokir Firebase.';
+  }
+  if (error instanceof Error) return error.message;
+  return 'Terjadi kesalahan yang tidak diketahui saat mengakses Firestore.';
+}
+
+export async function checkFirestoreConnection(): Promise<{ projectId: string; destinationCount: number }> {
+  const firestore = requireFirestore();
+  const snapshot = await getDocsFromServer(collection(firestore, 'destinations'));
+  const destinationCount = snapshot.docs.filter(
+    destination => destination.id !== DESTINATIONS_CATALOG_MIGRATION_ID
+  ).length;
+
+  return {
+    projectId: firebaseConfig.projectId,
+    destinationCount
+  };
 }
 
 // ---------------- USER AUTHENTICATION ----------------
@@ -45,9 +131,7 @@ export interface AuthUser {
 const LOCAL_USER_KEY = 'pesisir_local_user';
 const ADMIN_SESSION_KEY = 'pesisir_admin_session_uid';
 const ADMIN_EMAILS = [
-  'admin@pesisirku.id',
-  'admin@gmail.com',
-  'morendyyonathanrumegang@gmail.com'
+  'andreaserr@gmail.com'
 ];
 
 export function getCurrentUser(): AuthUser | null {
@@ -58,7 +142,7 @@ export function getCurrentUser(): AuthUser | null {
       user.isAdmin = localStorage.getItem(ADMIN_SESSION_KEY) === user.uid;
       localStorage.setItem(LOCAL_USER_KEY, JSON.stringify(user));
       return user;
-    } catch (e) {
+    } catch {
       return null;
     }
   }
@@ -178,6 +262,56 @@ export async function logoutUser(): Promise<void> {
 const DESTINATIONS_STORAGE_KEY = 'pesisir_destinations_store';
 const DESTINATIONS_CATALOG_VERSION_KEY = 'pesisir_destinations_catalog_version';
 const DESTINATIONS_CATALOG_VERSION = '2';
+const DESTINATIONS_CATALOG_MIGRATION_ID = 'localist_catalog_seed_v1';
+const DESTINATION_REVIEWS_COLLECTION = 'destinationReviews';
+
+interface StoredDestinationReview extends DestinationReview {
+  destinationId: string;
+}
+
+async function loadDestinationReviews(
+  firestore: Firestore,
+  destinations: Destination[]
+): Promise<Destination[]> {
+  const snapshot = await getDocs(collection(firestore, DESTINATION_REVIEWS_COLLECTION));
+  const reviewsByDestination = new Map<string, DestinationReview[]>();
+
+  snapshot.docs.forEach(reviewDoc => {
+    const review = {
+      ...reviewDoc.data(),
+      id: reviewDoc.id
+    } as StoredDestinationReview;
+    if (typeof review.destinationId !== 'string') return;
+
+    const reviews = reviewsByDestination.get(review.destinationId) || [];
+    reviews.push(review);
+    reviewsByDestination.set(review.destinationId, reviews);
+  });
+
+  const merged = destinations.map(destination => {
+    const existingReviews = destination.reviews || [];
+    const existingReviewIds = new Set(existingReviews.map(review => review.id));
+    const storedReviews = (reviewsByDestination.get(destination.id) || [])
+      .filter(review => !existingReviewIds.has(review.id))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    if (storedReviews.length === 0) return destination;
+
+    const baseReviewCount = Math.max(destination.reviewCount, existingReviews.length);
+    const reviewCount = baseReviewCount + storedReviews.length;
+    const totalRating = destination.rating * baseReviewCount
+      + storedReviews.reduce((sum, review) => sum + review.rating, 0);
+
+    return {
+      ...destination,
+      rating: Math.round((totalRating / reviewCount) * 10) / 10,
+      reviewCount,
+      reviews: [...storedReviews, ...existingReviews]
+    };
+  });
+
+  localStorage.setItem(DESTINATIONS_STORAGE_KEY, JSON.stringify(merged));
+  return merged;
+}
 
 export function getStoredDestinations(): Destination[] {
   const saved = localStorage.getItem(DESTINATIONS_STORAGE_KEY);
@@ -205,44 +339,94 @@ export function getStoredDestinations(): Destination[] {
 }
 
 export async function loadDestinations(isAdmin = false): Promise<Destination[]> {
-  if (!db) return getStoredDestinations();
-
-  const snapshot = await getDocs(collection(db, 'destinations'));
-  if (snapshot.empty) {
-    if (!isAdmin) return getStoredDestinations();
-
-    const batch = writeBatch(db);
-    INITIAL_DESTINATIONS.forEach(destination => {
-      batch.set(doc(db!, 'destinations', destination.id), destination);
-    });
-    await batch.commit();
-    localStorage.setItem(DESTINATIONS_STORAGE_KEY, JSON.stringify(INITIAL_DESTINATIONS));
-    return INITIAL_DESTINATIONS;
+  if (!db) {
+    if (isFirebaseConfigured()) requireFirestore();
+    return getStoredDestinations();
   }
 
-  const destinations = snapshot.docs.map(destination => destination.data() as Destination);
-  localStorage.setItem(DESTINATIONS_STORAGE_KEY, JSON.stringify(destinations));
-  return destinations;
+  let destinations: Destination[];
+  if (isAdmin) {
+    const result = await seedInitialDestinations();
+    destinations = result.destinations;
+  } else {
+    const snapshot = await getDocsFromServer(collection(db, 'destinations'));
+    destinations = snapshot.docs
+      .filter(destination => destination.id !== DESTINATIONS_CATALOG_MIGRATION_ID)
+      .map(destination => destination.data() as Destination);
+    if (destinations.length === 0) return getStoredDestinations();
+  }
+
+  return loadDestinationReviews(db, destinations);
 }
 
-export async function saveDestination(dest: Destination): Promise<Destination[]> {
-  const all = getStoredDestinations();
-  const index = all.findIndex(d => d.id === dest.id);
-  let updated: Destination[];
-  if (index >= 0) {
-    updated = all.map(d => d.id === dest.id ? dest : d);
-  } else {
-    updated = [dest, ...all];
+export async function seedInitialDestinations(): Promise<{ destinations: Destination[]; addedCount: number }> {
+  const firestore = requireFirestore();
+  let snapshot = await getDocsFromServer(collection(firestore, 'destinations'));
+  const migration = snapshot.docs.find(destination => destination.id === DESTINATIONS_CATALOG_MIGRATION_ID);
+  let addedCount = 0;
+
+  if (!migration) {
+    const existingIds = new Set(snapshot.docs.map(destination => destination.id));
+    const missingDestinations = INITIAL_DESTINATIONS.filter(destination => !existingIds.has(destination.id));
+    const batch = writeBatch(firestore);
+
+    missingDestinations.forEach(destination => {
+      batch.set(doc(firestore, 'destinations', destination.id), destination);
+    });
+    batch.set(doc(firestore, 'destinations', DESTINATIONS_CATALOG_MIGRATION_ID), {
+      catalogSeedVersion: 1,
+      seededAt: new Date().toISOString()
+    });
+    await batch.commit();
+    addedCount = missingDestinations.length;
+    snapshot = await getDocsFromServer(collection(firestore, 'destinations'));
   }
-  if (db) await setDoc(doc(db, 'destinations', dest.id), dest);
+
+  const destinations = snapshot.docs
+    .filter(destination => destination.id !== DESTINATIONS_CATALOG_MIGRATION_ID)
+    .map(destination => destination.data() as Destination);
+  localStorage.setItem(DESTINATIONS_STORAGE_KEY, JSON.stringify(destinations));
+  return { destinations, addedCount };
+}
+
+export async function saveDestination(
+  dest: Destination,
+  currentDestinations: Destination[] = getStoredDestinations()
+): Promise<Destination[]> {
+  const firestore = requireFirestore();
+  const destinationRef = doc(firestore, 'destinations', dest.id);
+  const existingSnapshot = await getDoc(destinationRef);
+  if (existingSnapshot.exists()) {
+    const storedData = existingSnapshot.data();
+    const storedReviews = Array.isArray(storedData.reviews)
+      ? storedData.reviews as DestinationReview[]
+      : [];
+    const storedReviewIds = new Set(storedReviews.map(review => review.id));
+    await setDoc(destinationRef, {
+      ...dest,
+      rating: typeof storedData.rating === 'number' ? storedData.rating : dest.rating,
+      reviewCount: typeof storedData.reviewCount === 'number' ? storedData.reviewCount : dest.reviewCount,
+      reviews: (dest.reviews || []).filter(review => storedReviewIds.has(review.id))
+    });
+  } else {
+    await setDoc(destinationRef, dest);
+  }
+  const index = currentDestinations.findIndex(destination => destination.id === dest.id);
+  const updated = index >= 0
+    ? currentDestinations.map(destination => destination.id === dest.id ? dest : destination)
+    : [dest, ...currentDestinations];
   localStorage.setItem(DESTINATIONS_STORAGE_KEY, JSON.stringify(updated));
   return updated;
 }
 
-export async function deleteDestination(destId: string): Promise<Destination[]> {
-  const all = getStoredDestinations();
-  const updated = all.filter(d => d.id !== destId);
-  if (db) await deleteDoc(doc(db, 'destinations', destId));
+export async function deleteDestination(
+  destId: string,
+  currentDestinations: Destination[] = getStoredDestinations()
+): Promise<Destination[]> {
+  const firestore = requireFirestore();
+  const destinationRef = doc(firestore, 'destinations', destId);
+  await deleteDoc(destinationRef);
+  const updated = currentDestinations.filter(destination => destination.id !== destId);
   localStorage.setItem(DESTINATIONS_STORAGE_KEY, JSON.stringify(updated));
   return updated;
 }
@@ -360,29 +544,45 @@ export async function addDestinationReview(
 ): Promise<Destination[]> {
   const all = getStoredDestinations();
   const dest = all.find(d => d.id === destId);
-  if (!dest) return all;
+  if (!dest) throw new Error('Destinasi tidak ditemukan saat menyimpan ulasan.');
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    throw new Error('Rating ulasan harus berupa angka 1 sampai 5.');
+  }
+  const trimmedComment = comment.trim();
+  if (!trimmedComment) throw new Error('Komentar ulasan tidak boleh kosong.');
 
+  const firestore = requireFirestore();
+  const reviewRef = doc(collection(firestore, DESTINATION_REVIEWS_COLLECTION));
   const newReview: DestinationReview = {
-    id: 'rev-' + Date.now(),
+    id: reviewRef.id,
     userId: user.uid,
     userName: user.displayName,
     rating,
-    comment,
+    comment: trimmedComment,
     createdAt: new Date().toISOString().split('T')[0]
   };
+  await setDoc(reviewRef, { ...newReview, destinationId: destId });
 
   const existingReviews = dest.reviews || [];
   const updatedReviews = [newReview, ...existingReviews];
-  const newRating = Math.round((updatedReviews.reduce((sum, r) => sum + r.rating, 0) / updatedReviews.length) * 10) / 10;
+  const baseReviewCount = Math.max(dest.reviewCount, existingReviews.length);
+  const reviewCount = baseReviewCount + 1;
+  const newRating = Math.round(
+    ((dest.rating * baseReviewCount + rating) / reviewCount) * 10
+  ) / 10;
 
   const updatedDest: Destination = {
     ...dest,
     rating: newRating,
-    reviewCount: updatedReviews.length,
+    reviewCount,
     reviews: updatedReviews
   };
 
-  return saveDestination(updatedDest);
+  const updatedDestinations = all.map(destination =>
+    destination.id === destId ? updatedDest : destination
+  );
+  localStorage.setItem(DESTINATIONS_STORAGE_KEY, JSON.stringify(updatedDestinations));
+  return updatedDestinations;
 }
 
 export async function deleteReview(destId: string, reviewId: string): Promise<Destination[]> {
@@ -390,17 +590,62 @@ export async function deleteReview(destId: string, reviewId: string): Promise<De
   const dest = all.find(d => d.id === destId);
   if (!dest || !dest.reviews) return all;
 
+  const review = dest.reviews.find(item => item.id === reviewId);
+  if (!review) return all;
+
   const updatedReviews = dest.reviews.filter(r => r.id !== reviewId);
-  const newRating = updatedReviews.length > 0 
-    ? Math.round((updatedReviews.reduce((sum, r) => sum + r.rating, 0) / updatedReviews.length) * 10) / 10
+  const reviewCount = Math.max(0, dest.reviewCount - 1);
+  const newRating = reviewCount > 0
+    ? Math.round(((dest.rating * dest.reviewCount - review.rating) / reviewCount) * 10) / 10
     : 4.5;
 
   const updatedDest: Destination = {
     ...dest,
     rating: newRating,
-    reviewCount: updatedReviews.length,
+    reviewCount,
     reviews: updatedReviews
   };
 
-  return saveDestination(updatedDest);
+  const firestore = requireFirestore();
+  const reviewRef = doc(firestore, DESTINATION_REVIEWS_COLLECTION, reviewId);
+  const reviewSnapshot = await getDoc(reviewRef);
+  if (reviewSnapshot.exists()) {
+    if (reviewSnapshot.data().destinationId !== destId) {
+      throw new Error('Ulasan tidak cocok dengan destinasi yang dipilih.');
+    }
+    await deleteDoc(reviewRef);
+  } else {
+    const destinationRef = doc(firestore, 'destinations', destId);
+    const destinationSnapshot = await getDoc(destinationRef);
+    if (!destinationSnapshot.exists()) {
+      throw new Error('Destinasi tidak ditemukan saat menghapus ulasan.');
+    }
+
+    const storedData = destinationSnapshot.data();
+    const storedReviews = Array.isArray(storedData.reviews)
+      ? storedData.reviews as DestinationReview[]
+      : [];
+    if (!storedReviews.some(storedReview => storedReview.id === reviewId)) {
+      throw new Error('Ulasan tidak ditemukan di Firestore.');
+    }
+
+    const storedReviewCount = typeof storedData.reviewCount === 'number' ? storedData.reviewCount : 0;
+    const storedRating = typeof storedData.rating === 'number' ? storedData.rating : 4.5;
+    const storedReviewCountAfterDelete = Math.max(0, storedReviewCount - 1);
+    const storedRatingAfterDelete = storedReviewCountAfterDelete > 0
+      ? Math.round(((storedRating * storedReviewCount - review.rating) / storedReviewCountAfterDelete) * 10) / 10
+      : 4.5;
+
+    await updateDoc(destinationRef, {
+      reviews: storedReviews.filter(storedReview => storedReview.id !== reviewId),
+      reviewCount: storedReviewCountAfterDelete,
+      rating: storedRatingAfterDelete
+    });
+  }
+
+  const updatedDestinations = all.map(destination =>
+    destination.id === destId ? updatedDest : destination
+  );
+  localStorage.setItem(DESTINATIONS_STORAGE_KEY, JSON.stringify(updatedDestinations));
+  return updatedDestinations;
 }

@@ -3,9 +3,36 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-
 import L from 'leaflet';
 import { DESTINATION_CATEGORIES, Destination, Category, isMarineCategory, REGIONS } from '../types/destination';
 import { 
-  Navigation, Search, Star, Car, Ship, Info, MapPin,
+  Navigation, Search, Star, Car, Ship, Info, MapPin, LoaderCircle,
   List, Map as MapIcon, ChevronLeft, Heart, ExternalLink
 } from 'lucide-react';
+
+type Coordinates = [number, number];
+
+function getCurrentCoordinates(): Promise<Coordinates> {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error('Browser ini tidak mendukung geolokasi. Coba gunakan browser lain.'));
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      position => resolve([position.coords.latitude, position.coords.longitude]),
+      error => {
+        if (error.code === error.PERMISSION_DENIED) {
+          reject(new Error('Izin lokasi ditolak. Izinkan akses lokasi untuk situs ini dari pengaturan browser, lalu coba lagi.'));
+        } else if (error.code === error.POSITION_UNAVAILABLE) {
+          reject(new Error('Posisi GPS belum tersedia. Aktifkan layanan lokasi perangkat dan coba lagi.'));
+        } else if (error.code === error.TIMEOUT) {
+          reject(new Error('Pencarian GPS terlalu lama. Coba lagi di area dengan sinyal lokasi yang lebih baik.'));
+        } else {
+          reject(new Error('Lokasi saat ini tidak dapat diperoleh.'));
+        }
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  });
+}
 
 interface MapViewProps {
   destinations: Destination[];
@@ -162,21 +189,28 @@ export const MapView: React.FC<MapViewProps> = ({
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   // Routing State
-  const [userLocation, setUserLocation] = useState<[number, number]>([1.4748, 124.8428]); // Default: Manado Zero Point
+  const [userLocation, setUserLocation] = useState<Coordinates | null>(null);
   const [activeRoute, setActiveRoute] = useState<[number, number][] | null>(null);
   const [routeInfo, setRouteInfo] = useState<{ distanceKm: number; durationMin: number; destName: string; boatFee: number } | null>(null);
   const [isRoutingLoading, setIsRoutingLoading] = useState<boolean>(false);
+  const [isLocationLoading, setIsLocationLoading] = useState<boolean>(false);
+  const [locationError, setLocationError] = useState<string | null>(null);
+  const [routeError, setRouteError] = useState<string | null>(null);
 
-  // Get real user GPS location if permitted
+  // Request the browser's GPS position; never present the fallback map center as the user's location.
   useEffect(() => {
-    if ('geolocation' in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        pos => {
-          setUserLocation([pos.coords.latitude, pos.coords.longitude]);
-        },
-        err => console.log('Geolocation not active, using Manado City Center as origin:', err)
-      );
-    }
+    let active = true;
+    getCurrentCoordinates().then(location => {
+      if (!active) return;
+      setUserLocation(location);
+      setLocationError(null);
+    }).catch(error => {
+      if (active) setLocationError(error instanceof Error ? error.message : 'Lokasi tidak dapat diperoleh.');
+    });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   // Filtered destinations
@@ -200,8 +234,15 @@ export const MapView: React.FC<MapViewProps> = ({
   // Calculate route using OSRM Free Routing Service
   const calculateRoute = async (dest: Destination) => {
     setIsRoutingLoading(true);
+    setRouteError(null);
+    setActiveRoute(null);
+    setRouteInfo(null);
     try {
-      const [startLat, startLng] = userLocation;
+      const currentLocation = await getCurrentCoordinates();
+      setUserLocation(currentLocation);
+      setLocationError(null);
+      setRouteError(null);
+      const [startLat, startLng] = currentLocation;
       const { lat: endLat, lng: endLng } = dest.coordinates;
 
       if (dest.boatFee > 0) {
@@ -219,6 +260,7 @@ export const MapView: React.FC<MapViewProps> = ({
       
       const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${startLng},${startLat};${endLng},${endLat}?overview=full&geometries=geojson`;
       const res = await fetch(osrmUrl);
+      if (!res.ok) throw new Error(`Layanan rute mengembalikan status ${res.status}.`);
       const data = await res.json();
 
       if (data.code === 'Ok' && data.routes?.[0]) {
@@ -236,26 +278,48 @@ export const MapView: React.FC<MapViewProps> = ({
         setMapCenter([(startLat + endLat) / 2, (startLng + endLng) / 2]);
         setMapZoom(11);
       } else {
-        // Fallback straight line
+        setRouteInfo(null);
         setActiveRoute([[startLat, startLng], [endLat, endLng]]);
-        setRouteInfo({
-          distanceKm: 25,
-          durationMin: 45,
-          destName: dest.name,
-          boatFee: dest.boatFee
-        });
+        setRouteError('Rute jalan tidak tersedia. Garis pada peta hanya menunjukkan arah langsung, bukan jalur jalan.');
       }
-    } catch (e) {
-      console.warn('OSRM routing fetch failed:', e);
-      setActiveRoute([[userLocation[0], userLocation[1]], [dest.coordinates.lat, dest.coordinates.lng]]);
+    } catch (error) {
+      console.warn('Route request failed:', error);
+      if (error instanceof Error && /izin lokasi|gps|posisi|browser ini|lokasi saat ini/i.test(error.message)) {
+        setLocationError(error.message);
+        setRouteError(error.message);
+        setActiveRoute(null);
+        setRouteInfo(null);
+      } else {
+        setRouteError('Rute jalan gagal dimuat. Periksa koneksi internet, lalu coba lagi.');
+        if (userLocation) setActiveRoute([[userLocation[0], userLocation[1]], [dest.coordinates.lat, dest.coordinates.lng]]);
+        setRouteInfo(null);
+      }
     } finally {
       setIsRoutingLoading(false);
+    }
+  };
+
+  const handleLocateMe = async () => {
+    setIsLocationLoading(true);
+    setLocationError(null);
+    try {
+      const location = await getCurrentCoordinates();
+      setUserLocation(location);
+      setLocationError(null);
+      setRouteError(null);
+      setMapCenter(location);
+      setMapZoom(14);
+    } catch (error) {
+      setLocationError(error instanceof Error ? error.message : 'Lokasi tidak dapat diperoleh.');
+    } finally {
+      setIsLocationLoading(false);
     }
   };
 
   const clearRoute = () => {
     setActiveRoute(null);
     setRouteInfo(null);
+    setRouteError(null);
   };
 
   // Focus on destination from list card
@@ -351,7 +415,7 @@ export const MapView: React.FC<MapViewProps> = ({
             )}
           </div>
 
-          {/* Category Filter Pills (Horizontal Scroll) */}
+          {/* Category Filter Pills */}
           <div>
             <div className="flex items-center justify-between mb-1">
               <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
@@ -367,18 +431,18 @@ export const MapView: React.FC<MapViewProps> = ({
               )}
             </div>
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
-              {CATEGORIES.map(cat => (
+              {CATEGORIES.map(category => (
                 <button
-                  key={cat.value}
-                  onClick={() => setSelectedCategory(cat.value)}
+                  key={category.value}
+                  onClick={() => setSelectedCategory(category.value)}
                   className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap transition-all ${
-                    selectedCategory === cat.value
+                    selectedCategory === category.value
                       ? 'bg-cyan-600 text-white shadow-sm ring-1 ring-cyan-500'
                       : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-750'
                   }`}
                 >
-                  <span>{cat.icon}</span>
-                  <span>{cat.label}</span>
+                  <span>{category.icon}</span>
+                  <span>{category.label}</span>
                 </button>
               ))}
             </div>
@@ -544,7 +608,9 @@ export const MapView: React.FC<MapViewProps> = ({
                           className="flex items-center justify-center p-1 rounded-lg text-[10px] font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors"
                           title="Rute perjalanan OSRM"
                         >
-                          <Navigation className="w-3 h-3 text-cyan-600 dark:text-cyan-400" />
+                          {isRoutingLoading
+                            ? <LoaderCircle className="w-3 h-3 animate-spin text-cyan-600 dark:text-cyan-400" />
+                            : <Navigation className="w-3 h-3 text-cyan-600 dark:text-cyan-400" />}
                         </button>
                       </div>
                     </div>
@@ -573,28 +639,31 @@ export const MapView: React.FC<MapViewProps> = ({
             </button>
           )}
 
-          {/* Quick Category Badges on Top Map Bar (If sidebar closed or desktop preview) */}
-          <div className="hidden lg:flex items-center gap-1.5 pointer-events-auto bg-white/90 dark:bg-slate-900/90 backdrop-blur-md px-2 py-1 rounded-2xl shadow-md border border-slate-200/80 dark:border-slate-800">
-            {CATEGORIES.map(cat => (
-              <button
-                key={cat.value}
-                onClick={() => setSelectedCategory(cat.value)}
-                className={`px-2 py-0.5 rounded-lg text-[10px] font-semibold whitespace-nowrap transition-all ${
-                  selectedCategory === cat.value
-                    ? 'bg-cyan-600 text-white'
-                    : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                }`}
-              >
-                {cat.icon} {cat.label}
-              </button>
-            ))}
-          </div>
-
           {/* Active Count Pill */}
           <div className="ml-auto pointer-events-auto px-3 py-1.5 rounded-xl bg-slate-900/85 text-white backdrop-blur-md shadow text-xs font-bold flex items-center gap-1.5">
             <MapPin className="w-3.5 h-3.5 text-cyan-400" />
             <span>{filtered.length} Destinasi</span>
           </div>
+        </div>
+
+        <div className="absolute top-14 right-3 z-30 flex max-w-[min(24rem,calc(100%-1.5rem))] flex-col items-end gap-2">
+          <button
+            type="button"
+            onClick={handleLocateMe}
+            disabled={isLocationLoading}
+            className="pointer-events-auto flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white/95 px-3 py-2 text-xs font-bold text-slate-700 shadow-lg backdrop-blur-md transition hover:text-cyan-700 disabled:cursor-wait disabled:opacity-70 dark:border-slate-700 dark:bg-slate-900/95 dark:text-slate-200 dark:hover:text-cyan-300"
+            title="Gunakan posisi GPS saat ini"
+          >
+            {isLocationLoading
+              ? <LoaderCircle className="h-4 w-4 animate-spin" />
+              : <Navigation className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />}
+            <span>{isLocationLoading ? 'Mencari lokasi…' : 'Lokasi saya'}</span>
+          </button>
+          {(routeError || locationError) && (
+            <p role="status" className="pointer-events-auto rounded-xl border border-amber-300 bg-amber-50/95 p-3 text-xs text-amber-950 shadow-lg backdrop-blur-md dark:border-amber-800 dark:bg-amber-950/90 dark:text-amber-100">
+              {routeError || locationError}
+            </p>
+          )}
         </div>
 
         {/* Active Route Floating Card */}
@@ -669,14 +738,16 @@ export const MapView: React.FC<MapViewProps> = ({
           />
 
           {/* User Location Marker */}
-          <Marker position={userLocation} icon={userLocationIcon}>
-            <Popup>
-              <div className="p-2 text-center">
-                <span className="text-xs font-bold text-slate-800">Lokasi Anda (Titik Awal)</span>
-                <p className="text-[11px] text-slate-500">Pusat Manado / Posisi GPS</p>
-              </div>
-            </Popup>
-          </Marker>
+          {userLocation && (
+            <Marker position={userLocation} icon={userLocationIcon}>
+              <Popup>
+                <div className="p-2 text-center">
+                  <span className="text-xs font-bold text-slate-800">Lokasi GPS Anda (Titik Awal)</span>
+                  <p className="text-[11px] text-slate-500">Posisi diperoleh dari perangkat Anda</p>
+                </div>
+              </Popup>
+            </Marker>
+          )}
 
           {/* OSRM Route Polyline */}
           {activeRoute && (

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Destination, DestinationReview, isMarineCategory } from '../types/destination';
+import { Destination, isMarineCategory } from '../types/destination';
 import { 
   getDestinationWeatherAndMarine, 
   WeatherMarineDetail 
@@ -14,9 +14,9 @@ import {
   deleteReview 
 } from '../services/firebaseService';
 import { 
-  X, Star, Waves, Wind, Thermometer, ShieldAlert, 
+  X, Star, Waves,
   CheckCircle, AlertTriangle, Sparkles, Send, Trash2, 
-  Heart, ExternalLink, MapPin, Clock, DollarSign
+  Heart, ExternalLink
 } from 'lucide-react';
 
 interface DestinationModalProps {
@@ -30,6 +30,25 @@ interface DestinationModalProps {
 }
 
 export const DestinationModal: React.FC<DestinationModalProps> = ({
+  ...props
+}) => {
+  const { destination } = props;
+  if (!destination) return null;
+
+  return (
+    <DestinationModalContent
+      key={`${destination.id}:${destination.name}:${destination.coordinates.lat}:${destination.coordinates.lng}`}
+      {...props}
+      destination={destination}
+    />
+  );
+};
+
+interface ActiveDestinationModalProps extends Omit<DestinationModalProps, 'destination'> {
+  destination: Destination;
+}
+
+const DestinationModalContent: React.FC<ActiveDestinationModalProps> = ({
   destination,
   onClose,
   currentUser,
@@ -38,7 +57,6 @@ export const DestinationModal: React.FC<DestinationModalProps> = ({
   isFavorite,
   onToggleFavorite
 }) => {
-  if (!destination) return null;
   const isMarineDestination = isMarineCategory(destination.category);
 
   // Weather & Marine State
@@ -59,7 +77,6 @@ export const DestinationModal: React.FC<DestinationModalProps> = ({
   // Fetch Open-Meteo REST API whenever destination changes
   useEffect(() => {
     let isMounted = true;
-    setIsLoadingWeather(true);
 
     getDestinationWeatherAndMarine(destination.coordinates.lat, destination.coordinates.lng)
       .then(async data => {
@@ -79,7 +96,7 @@ export const DestinationModal: React.FC<DestinationModalProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [destination.id]);
+  }, [destination.coordinates.lat, destination.coordinates.lng, destination.name]);
 
   // Handle Review Submission
   const handleSubmitReview = async (e: React.FormEvent) => {
@@ -101,7 +118,11 @@ export const DestinationModal: React.FC<DestinationModalProps> = ({
       setReviewStorageError(null);
     } catch (error) {
       console.error('Unable to save destination review:', error);
-      setReviewStorageError('Ulasan gagal disimpan ke Firebase. Periksa koneksi dan aturan akses.');
+      setReviewStorageError(
+        error instanceof Error
+          ? `Ulasan gagal disimpan: ${error.message}`
+          : 'Ulasan gagal disimpan karena terjadi kesalahan yang tidak diketahui.'
+      );
     } finally {
       setIsSubmittingReview(false);
     }
@@ -118,7 +139,11 @@ export const DestinationModal: React.FC<DestinationModalProps> = ({
       setReviewStorageError(null);
     } catch (error) {
       console.error('Unable to delete destination review:', error);
-      setReviewStorageError('Ulasan gagal dihapus dari Firebase. Periksa koneksi dan aturan akses.');
+      setReviewStorageError(
+        error instanceof Error
+          ? `Ulasan gagal dihapus: ${error.message}`
+          : 'Ulasan gagal dihapus karena terjadi kesalahan yang tidak diketahui.'
+      );
     }
   };
 
@@ -465,9 +490,10 @@ export const DestinationModal: React.FC<DestinationModalProps> = ({
               {/* Textarea */}
               <textarea
                 rows={2}
+                maxLength={2000}
                 value={comment}
                 onChange={e => setComment(e.target.value)}
-                placeholder={currentUser ? 'Bagikan pengalaman ombak, kebersihan, atau keramahan pemandu...' : 'Silakan masuk akun terlebih dahulu untuk menulis review'}
+                placeholder={currentUser ? 'Bagikan pengalaman anda...' : 'Silakan masuk akun terlebih dahulu untuk menulis review'}
                 disabled={!currentUser}
                 className="w-full p-2.5 text-xs sm:text-sm rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500"
               />

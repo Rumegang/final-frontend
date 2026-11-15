@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Destination, TripItinerary } from './types/destination';
 import { 
   AuthUser, 
@@ -11,6 +11,7 @@ import {
   getSavedItineraries, 
   loginWithGoogle,
   loginAdminWithEmailPassword,
+  getFirestoreErrorMessage,
   isFirebaseConfigured,
   subscribeToAuthChanges,
   logoutUser, 
@@ -23,7 +24,7 @@ import { TripPlannerView } from './components/TripPlannerView';
 import { ChatbotView } from './components/ChatbotView';
 import { SavedItinerariesView } from './components/SavedItinerariesView';
 import { AdminDashboard } from './components/AdminDashboard';
-import { KeyRound, X, Check, Sparkles, UserRound, Shield, LogIn, Waves, Sun, Moon, LogOut, ArrowRight, MapPin, Heart } from 'lucide-react';
+import { Sparkles, UserRound, Shield, LogIn, Waves, Sun, Moon, LogOut, ArrowRight, MapPin, Heart } from 'lucide-react';
 
 const captureResult = <T,>(promise: Promise<T>) => promise.then(
   data => ({ data }),
@@ -44,27 +45,20 @@ const getStoredThemePreference = (): boolean => {
   }
 };
 
-const getStoredApiKey = (): string => {
-  if (typeof window === 'undefined') return '';
-
-  try {
-    return window.localStorage.getItem('pesisir_gemini_api_key') || '';
-  } catch {
-    return '';
-  }
-};
-
 export function App() {
   // Navigation & View State
   const [activeTab, setActiveTab] = useState<'map' | 'planner' | 'chatbot' | 'saved'>('map');
   const [destinations, setDestinations] = useState<Destination[]>(() => getStoredDestinations());
+  const destinationsRevision = useRef(0);
   const [selectedDestination, setSelectedDestination] = useState<Destination | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginStage, setLoginStage] = useState<'welcome' | 'login'>('welcome');
-  const [adminEmail, setAdminEmail] = useState('morendyyonathanrumegang@gmail.com');
+  const [adminEmail, setAdminEmail] = useState('andreaserr@gmail.com');
   const [adminPassword, setAdminPassword] = useState('');
   const [firebaseError, setFirebaseError] = useState<string | null>(null);
+  const [firebaseRetry, setFirebaseRetry] = useState(0);
+  const [isOnline, setIsOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine);
 
   // User & Data Persistence State
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => getCurrentUser());
@@ -73,11 +67,6 @@ export function App() {
 
   // Dark Mode State
   const [isDark, setIsDark] = useState<boolean>(getStoredThemePreference);
-
-  // Settings Modal State (for optional custom Gemini API Key)
-  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState<boolean>(false);
-  const [apiKeyInput, setApiKeyInput] = useState<string>(getStoredApiKey);
-  const [isKeySavedFeedback, setIsKeySavedFeedback] = useState<boolean>(false);
 
   // Sync dark mode class
   useEffect(() => {
@@ -101,8 +90,27 @@ export function App() {
   useEffect(() => subscribeToAuthChanges(setCurrentUser), []);
 
   useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  useEffect(() => {
     let active = true;
     const user = currentUser;
+    const revisionAtLoadStart = destinationsRevision.current;
+
+    if (!isOnline) {
+      return () => {
+        active = false;
+      };
+    }
 
     Promise.all([
       captureResult(loadDestinations(user?.isAdmin === true)),
@@ -112,7 +120,11 @@ export function App() {
       if (!active) return;
 
       const failures: unknown[] = [];
-      if ('data' in destinationsResult) setDestinations(destinationsResult.data);
+      if ('data' in destinationsResult) {
+        if (destinationsRevision.current === revisionAtLoadStart) {
+          setDestinations(destinationsResult.data);
+        }
+      }
       else failures.push(destinationsResult.error);
       if ('data' in favoritesResult) setFavorites(favoritesResult.data);
       else failures.push(favoritesResult.error);
@@ -121,7 +133,7 @@ export function App() {
 
       if (failures.length > 0) {
         console.error('Firebase data loading failed:', failures);
-        setFirebaseError(failures.map(error => error instanceof Error ? error.message : 'Gagal memuat data Firebase.').join(' '));
+        setFirebaseError(Array.from(new Set(failures.map(getFirestoreErrorMessage))).join(' '));
       } else {
         setFirebaseError(null);
       }
@@ -130,7 +142,7 @@ export function App() {
     return () => {
       active = false;
     };
-  }, [currentUser]);
+  }, [currentUser, firebaseRetry, isOnline]);
 
   // Auth handlers
   const handleLogin = async () => {
@@ -187,32 +199,20 @@ export function App() {
 
   // Update single destination (e.g. from review submission)
   const handleUpdateSingleDestination = (updated: Destination) => {
+    destinationsRevision.current += 1;
     setDestinations(prev => prev.map(d => d.id === updated.id ? updated : d));
     setSelectedDestination(updated);
+  };
+
+  const handleUpdateDestinations = (updated: Destination[]) => {
+    destinationsRevision.current += 1;
+    setDestinations(updated);
   };
 
   // Refresh saved data
   const handleRefreshSaved = () => {
     setSavedItineraries(getSavedItineraries(currentUser?.uid));
     setFavorites(getUserFavorites(currentUser?.uid));
-  };
-
-  const handleSaveApiKey = (e: React.FormEvent) => {
-    e.preventDefault();
-
-    try {
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem('pesisir_gemini_api_key', apiKeyInput.trim());
-      }
-    } catch {
-      // Ignore storage errors in restricted environments.
-    }
-
-    setIsKeySavedFeedback(true);
-    setTimeout(() => {
-      setIsKeySavedFeedback(false);
-      setIsApiKeyModalOpen(false);
-    }, 800);
   };
 
   if (!currentUser) {
@@ -380,7 +380,6 @@ export function App() {
                     {isLoggingIn ? 'Memproses...' : 'Masuk sebagai Admin'}
                   </button>
                   <p className="mt-3 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-                    Akun harus dibuat di Firebase Authentication dan emailnya harus terdaftar sebagai administrator.
                   </p>
                 </form>
               </div>
@@ -438,16 +437,28 @@ export function App() {
           Firebase belum dikonfigurasi — data hanya tersimpan di browser ini. Isi file <code>.env</code> memakai konfigurasi Firebase Web App.
         </div>
       )}
-      {firebaseError && (
-        <div role="alert" className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200">
-          Firebase: {firebaseError}
+      {(!isOnline || firebaseError) && (
+        <div role="alert" className="flex flex-col gap-2 border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200 sm:flex-row sm:items-center sm:justify-between">
+          <span>
+            Firebase: {!isOnline
+              ? 'Perangkat sedang offline. Hubungkan ke internet agar data dapat disinkronkan.'
+              : firebaseError}
+          </span>
+          <button
+            type="button"
+            onClick={() => setFirebaseRetry(retry => retry + 1)}
+            disabled={!isOnline}
+            className="shrink-0 rounded-lg border border-amber-400 px-3 py-1 text-xs font-bold hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-700 dark:hover:bg-amber-900/50"
+          >
+            Coba lagi
+          </button>
         </div>
       )}
 
       {currentUser.isAdmin ? (
         <AdminDashboard
           destinations={destinations}
-          onUpdateDestinations={setDestinations}
+          onUpdateDestinations={handleUpdateDestinations}
         />
       ) : (
       <main className="flex-1 flex flex-col">
@@ -492,16 +503,15 @@ export function App() {
       </main>
       )}
 
-      {/* Floating API Key Settings Pill */}
+      {/* Firebase AI Logic indicator */}
       <div className="fixed bottom-4 left-4 z-40">
-        <button
-          onClick={() => setIsApiKeyModalOpen(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold bg-white/90 dark:bg-slate-900/90 text-slate-600 dark:text-slate-400 hover:text-cyan-600 dark:hover:text-cyan-400 shadow-md border border-slate-200 dark:border-slate-800 backdrop-blur-md transition-colors"
-          title="Konfigurasi Kunci API Gemini (Opsional)"
+        <div
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold bg-white/90 dark:bg-slate-900/90 text-slate-600 dark:text-slate-400 shadow-md border border-slate-200 dark:border-slate-800 backdrop-blur-md"
+          title="Permintaan AI menggunakan Firebase AI Logic"
         >
-          <KeyRound className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Konfigurasi AI / API</span>
-        </button>
+          <Sparkles className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400" />
+          <span>Firebase AI Logic</span>
+        </div>
       </div>
 
       {/* Destination Detail & Realtime Marine Modal */}
@@ -515,63 +525,6 @@ export function App() {
         onToggleFavorite={handleToggleFavorite}
       />}
 
-      {/* API Key Modal */}
-      {isApiKeyModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-cyan-600" />
-                <h3 className="font-bold text-sm text-slate-800 dark:text-white">
-                  Pengaturan Google Gemini API Key
-                </h3>
-              </div>
-              <button
-                onClick={() => setIsApiKeyModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-500 leading-relaxed">
-              Sistem telah dilengkapi mesin sintesis grounded otomatis. Jika Anda ingin menghubungkan langsung dengan model Google Gemini 1.5 Flash untuk penalaran LLM live tambahan, masukkan API Key Anda di bawah:
-            </p>
-
-            <form onSubmit={handleSaveApiKey} className="space-y-3">
-              <div>
-                <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                  Gemini API Key
-                </label>
-                <input
-                  type="password"
-                  value={apiKeyInput}
-                  onChange={e => setApiKeyInput(e.target.value)}
-                  placeholder="AIzaSy..."
-                  className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs text-slate-800 dark:text-slate-100"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsApiKeyModalOpen(false)}
-                  className="px-3 py-1.5 rounded-xl text-xs text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
-                >
-                  Batal
-                </button>
-                <button
-                  type="submit"
-                  className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl text-xs font-bold bg-cyan-600 hover:bg-cyan-700 text-white shadow-sm"
-                >
-                  {isKeySavedFeedback ? <Check className="w-4 h-4" /> : null}
-                  <span>{isKeySavedFeedback ? 'Tersimpan!' : 'Simpan Kunci'}</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

@@ -1,10 +1,8 @@
 import React, { useState } from 'react';
 import { DESTINATION_CATEGORIES, Destination, Region, Category, isMarineCategory, REGIONS } from '../types/destination';
-import { saveDestination, deleteDestination, deleteReview } from '../services/firebaseService';
+import { saveDestination, deleteDestination, deleteReview, checkFirestoreConnection, seedInitialDestinations, getFirestoreErrorMessage } from '../services/firebaseService';
 import { 
-  Shield, Plus, Edit3, Trash2, CheckCircle2, 
-  MapPin, Star, AlertTriangle, Layers, MessageSquare, 
-  Sliders, X, Save
+  Shield, Plus, Edit3, Trash2, CheckCircle2, Star, X, Save, LoaderCircle
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -20,6 +18,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isEditingModalOpen, setIsEditingModalOpen] = useState<boolean>(false);
   const [editingDest, setEditingDest] = useState<Partial<Destination> | null>(null);
   const [storageError, setStorageError] = useState<string | null>(null);
+  const [storageSuccess, setStorageSuccess] = useState<string | null>(null);
+  const [isSavingDestination, setIsSavingDestination] = useState(false);
+  const [deletingDestinationId, setDeletingDestinationId] = useState<string | null>(null);
+  const [lastFirestoreWrite, setLastFirestoreWrite] = useState(false);
+  const [isCheckingFirestore, setIsCheckingFirestore] = useState(false);
+  const [firestoreCheck, setFirestoreCheck] = useState<{ projectId: string; destinationCount: number } | null>(null);
+  const [firestoreCheckError, setFirestoreCheckError] = useState<string | null>(null);
+  const [isSeedingCatalog, setIsSeedingCatalog] = useState(false);
 
   // Form states for adding/editing destination
   const [formName, setFormName] = useState('');
@@ -46,6 +52,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     .slice(0, 3);
 
   const handleOpenAdd = () => {
+    setStorageError(null);
+    setStorageSuccess(null);
     setEditingDest(null);
     setFormName('');
     setFormRegion('Manado');
@@ -64,6 +72,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleOpenEdit = (dest: Destination) => {
+    setStorageError(null);
+    setStorageSuccess(null);
     setEditingDest(dest);
     setFormName(dest.name);
     setFormRegion(dest.region);
@@ -84,6 +94,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSavingDestination) return;
+
+    setIsSavingDestination(true);
+    setStorageError(null);
+    setStorageSuccess(null);
     const destId = editingDest?.id || `dest-${Date.now()}`;
     const newDest: Destination = {
       id: destId,
@@ -96,12 +111,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         lng: parseFloat(formLng) || 124.8
       },
       entryFee: formEntryFee.trim() ? parseInt(formEntryFee, 10) : undefined,
-      boatFee: parseInt(formBoatFee) || 0,
+      boatFee: isMarineCategory(formCategory) ? parseInt(formBoatFee) || 0 : 0,
       gearRentFee: parseInt(formGearFee) || 0,
       isFamilyFriendly: formFamily,
       isSnorkelingSpot: formSnorkel,
       isDivingSpot: false,
-      waveConditionDefault: formWave,
+      waveConditionDefault: isMarineCategory(formCategory) ? formWave : 'Tenang',
       bestTimeToVisit: '08:00 - 17:00 WITA',
       facilities: formFacilities.split(',').map(s => s.trim()).filter(Boolean),
       imageUrl: formImageUrl || 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=800&q=80',
@@ -111,26 +126,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     try {
-      const updated = await saveDestination(newDest);
+      const updated = await saveDestination(newDest, destinations);
       onUpdateDestinations(updated);
-      setStorageError(null);
+      setLastFirestoreWrite(true);
+      setStorageSuccess(`“${newDest.name}” berhasil disimpan ke Firestore.`);
       setIsEditingModalOpen(false);
     } catch (error) {
       console.error('Unable to save destination:', error);
-      setStorageError('Destinasi gagal disimpan ke Firebase. Periksa koneksi dan aturan akses.');
+      setStorageError(`Destinasi gagal disimpan ke Firestore. ${getFirestoreErrorMessage(error)}`);
+    } finally {
+      setIsSavingDestination(false);
     }
   };
 
   const handleDeleteDest = async (id: string, name: string) => {
-    if (window.confirm(`Yakin ingin menghapus objek wisata "${name}"?`)) {
-      try {
-        const updated = await deleteDestination(id);
-        onUpdateDestinations(updated);
-        setStorageError(null);
-      } catch (error) {
-        console.error('Unable to delete destination:', error);
-        setStorageError('Destinasi gagal dihapus dari Firebase. Periksa koneksi dan aturan akses.');
-      }
+    if (deletingDestinationId || !window.confirm(`Yakin ingin menghapus objek wisata "${name}"?`)) return;
+
+    setDeletingDestinationId(id);
+    setStorageError(null);
+    setStorageSuccess(null);
+    try {
+      const updated = await deleteDestination(id, destinations);
+      onUpdateDestinations(updated);
+      setLastFirestoreWrite(true);
+      setStorageSuccess(`“${name}” berhasil dihapus dari Firestore.`);
+    } catch (error) {
+      console.error('Unable to delete destination:', error);
+      setStorageError(`Destinasi gagal dihapus dari Firestore. ${getFirestoreErrorMessage(error)}`);
+    } finally {
+      setDeletingDestinationId(null);
     }
   };
 
@@ -147,12 +171,53 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  const handleCheckFirestore = async () => {
+    setIsCheckingFirestore(true);
+    setFirestoreCheckError(null);
+    setFirestoreCheck(null);
+    try {
+      const result = await checkFirestoreConnection();
+      setFirestoreCheck(result);
+    } catch (error) {
+      setFirestoreCheckError(getFirestoreErrorMessage(error));
+    } finally {
+      setIsCheckingFirestore(false);
+    }
+  };
+
+  const handleSeedCatalog = async () => {
+    setIsSeedingCatalog(true);
+    setStorageError(null);
+    setStorageSuccess(null);
+    try {
+      const result = await seedInitialDestinations();
+      onUpdateDestinations(result.destinations);
+      setLastFirestoreWrite(true);
+      setStorageSuccess(
+        result.addedCount > 0
+          ? `${result.addedCount} destinasi katalog berhasil dikirim dan dibaca kembali dari Firestore.`
+          : `Katalog bawaan sudah tercatat di Firestore. ${result.destinations.length} destinasi terbaca.`
+      );
+    } catch (error) {
+      console.error('Unable to seed destination catalog:', error);
+      setStorageError(`Katalog gagal dikirim ke Firestore. ${getFirestoreErrorMessage(error)}`);
+    } finally {
+      setIsSeedingCatalog(false);
+    }
+  };
+
   return (
     <div className="w-full min-h-[calc(100vh-4rem)] bg-slate-50 dark:bg-slate-950 p-4 sm:p-6 lg:p-8">
       <div className="max-w-6xl mx-auto space-y-8">
         {storageError && (
           <p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
             {storageError}
+          </p>
+        )}
+        {storageSuccess && (
+          <p role="status" className="flex items-center gap-2 rounded-xl border border-emerald-300 bg-emerald-50 p-3 text-sm font-semibold text-emerald-800 shadow-sm dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200 animate-pulse">
+            <CheckCircle2 className="h-5 w-5 shrink-0" />
+            {storageSuccess}
           </p>
         )}
         
@@ -202,11 +267,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
           <div className="p-4 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
             <span className="text-slate-400 text-xs font-semibold block">Status Sinkronisasi</span>
-            <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 mt-1 flex items-center gap-1">
+            <span className={`text-xs font-bold mt-1 flex items-center gap-1 ${lastFirestoreWrite ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
               <CheckCircle2 className="w-3.5 h-3.5" />
-              <span>Realtime Aktif</span>
+              <span>{lastFirestoreWrite ? 'Penulisan terkonfirmasi' : firestoreCheck ? 'Firestore tersambung' : 'Belum diperiksa'}</span>
             </span>
-            <span className="text-[10px] text-slate-500">Firestore & Cache</span>
+            <button
+              type="button"
+              onClick={handleCheckFirestore}
+              disabled={isCheckingFirestore}
+              className="mt-2 inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-[10px] font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-wait disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              {isCheckingFirestore && <LoaderCircle className="h-3 w-3 animate-spin" />}
+              {isCheckingFirestore ? 'Menguji server…' : 'Tes koneksi Firestore'}
+            </button>
+            {firestoreCheck && (
+              <p role="status" className="mt-1 text-[10px] text-emerald-700 dark:text-emerald-400">
+                Server {firestoreCheck.projectId} merespons. {firestoreCheck.destinationCount} dokumen destinasi terbaca.
+              </p>
+            )}
+            {firestoreCheckError && (
+              <p role="alert" className="mt-1 text-[10px] text-rose-700 dark:text-rose-400">
+                Tes koneksi gagal: {firestoreCheckError}
+              </p>
+            )}
+            <span className="mt-1 block text-[10px] text-slate-500">Tes ini memastikan baca dari server; simpan baru menguji izin tulis.</span>
+            <button
+              type="button"
+              onClick={handleSeedCatalog}
+              disabled={isSeedingCatalog}
+              className="mt-2 inline-flex items-center gap-1 rounded-lg bg-cyan-600 px-2 py-1 text-[10px] font-bold text-white hover:bg-cyan-700 disabled:cursor-wait disabled:opacity-60"
+            >
+              {isSeedingCatalog && <LoaderCircle className="h-3 w-3 animate-spin" />}
+              {isSeedingCatalog ? 'Mengirim katalog…' : 'Kirim katalog bawaan'}
+            </button>
           </div>
         </div>
 
@@ -236,6 +329,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
           {activeSubTab === 'destinations' && (
             <button
+              type="button"
               onClick={handleOpenAdd}
               className="ml-auto px-4 py-2 rounded-xl text-xs font-bold bg-cyan-600 hover:bg-cyan-700 text-white shadow-sm flex items-center gap-1.5"
             >
@@ -296,6 +390,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </td>
                       <td className="p-3.5 text-right space-x-1">
                         <button
+                          type="button"
+                          disabled={deletingDestinationId !== null}
                           onClick={() => handleOpenEdit(dest)}
                           className="p-1.5 rounded-lg text-slate-500 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800"
                           title="Edit Wisata"
@@ -303,11 +399,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <Edit3 className="w-4 h-4" />
                         </button>
                         <button
+                          type="button"
+                          disabled={deletingDestinationId !== null}
                           onClick={() => handleDeleteDest(dest.id, dest.name)}
-                          className="p-1.5 rounded-lg text-slate-500 hover:text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-800"
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:cursor-wait disabled:opacity-60"
                           title="Hapus Wisata"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          {deletingDestinationId === dest.id
+                            ? <LoaderCircle className="w-4 h-4 animate-spin" />
+                            : <Trash2 className="w-4 h-4" />}
                         </button>
                       </td>
                     </tr>
@@ -428,7 +528,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </label>
                     <select
                       value={formCategory}
-                      onChange={e => setFormCategory(e.target.value as Category)}
+                      onChange={e => {
+                        const category = e.target.value as Category;
+                        setFormCategory(category);
+                        if (!isMarineCategory(category)) {
+                          setFormBoatFee('0');
+                          setFormWave('Tenang');
+                        }
+                      }}
                       className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
                     >
                       {DESTINATION_CATEGORIES.map(category => (
@@ -475,7 +582,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-3">
+                <div className={`grid gap-3 ${isMarineCategory(formCategory) ? 'grid-cols-3' : 'grid-cols-1'}`}>
                   <div>
                     <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
                       Tiket (Rp)
@@ -487,31 +594,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
                     />
                   </div>
-                  <div>
-                    <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                      Perahu (Rp)
-                    </label>
-                    <input
-                      type="number"
-                      value={formBoatFee}
-                      onChange={e => setFormBoatFee(e.target.value)}
-                      className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                      Kondisi Ombak
-                    </label>
-                    <select
-                      value={formWave}
-                      onChange={e => setFormWave(e.target.value as any)}
-                      className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
-                    >
-                      <option value="Tenang">Tenang</option>
-                      <option value="Sedang">Sedang</option>
-                      <option value="Berombak">Berombak</option>
-                    </select>
-                  </div>
+                  {isMarineCategory(formCategory) && (
+                    <>
+                      <div>
+                        <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                          Perahu (Rp)
+                        </label>
+                        <input
+                          type="number"
+                          value={formBoatFee}
+                          onChange={e => setFormBoatFee(e.target.value)}
+                          className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+                        />
+                      </div>
+                      <div>
+                        <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                          Kondisi Ombak
+                        </label>
+                        <select
+                          value={formWave}
+                          onChange={e => {
+                            const value = e.target.value;
+                            if (value === 'Tenang' || value === 'Sedang' || value === 'Berombak') {
+                              setFormWave(value);
+                            }
+                          }}
+                          className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+                        >
+                          <option value="Tenang">Tenang</option>
+                          <option value="Sedang">Sedang</option>
+                          <option value="Berombak">Berombak</option>
+                        </select>
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-4 py-1">
@@ -563,6 +679,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <div className="pt-3 flex items-center justify-end gap-2">
                   <button
                     type="button"
+                    disabled={isSavingDestination}
                     onClick={() => setIsEditingModalOpen(false)}
                     className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800"
                   >
@@ -570,10 +687,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </button>
                   <button
                     type="submit"
-                    className="px-5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-700 text-white font-bold flex items-center gap-1.5"
+                    disabled={isSavingDestination}
+                    className="px-5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-700 text-white font-bold flex items-center gap-1.5 disabled:cursor-wait disabled:opacity-70"
                   >
-                    <Save className="w-4 h-4" />
-                    <span>Simpan Perubahan</span>
+                    {isSavingDestination
+                      ? <LoaderCircle className="w-4 h-4 animate-spin" />
+                      : <Save className="w-4 h-4" />}
+                    <span>{isSavingDestination ? 'Menyimpan ke Firestore…' : 'Simpan Perubahan'}</span>
                   </button>
                 </div>
               </form>
